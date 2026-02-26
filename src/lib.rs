@@ -1006,33 +1006,9 @@ impl HappyEyeballs {
             Host::Domain(_) => {}
         }
 
-        // Collect resolved addresses from all completed A/AAAA queries.
-        let ipv4_addrs: Vec<Ipv4Addr> = self
-            .dns_queries
-            .iter()
-            .filter_map(|q| match q {
-                DnsQuery::Completed {
-                    response: DnsResult::A(Ok(addrs)),
-                    ..
-                } => Some(addrs.as_slice()),
-                _ => None,
-            })
-            .flatten()
-            .cloned()
-            .collect();
-        let ipv6_addrs: Vec<Ipv6Addr> = self
-            .dns_queries
-            .iter()
-            .filter_map(|q| match q {
-                DnsQuery::Completed {
-                    response: DnsResult::Aaaa(Ok(addrs)),
-                    ..
-                } => Some(addrs.as_slice()),
-                _ => None,
-            })
-            .flatten()
-            .cloned()
-            .collect();
+        let Host::Domain(ref origin_domain) = self.host else {
+            unreachable!("IP hosts returned early above");
+        };
 
         // Collect all ServiceInfos sorted by priority.
         let mut service_infos: Vec<&ServiceInfo> = self
@@ -1049,33 +1025,57 @@ impl HappyEyeballs {
             .collect();
         service_infos.sort_by_key(|i| i.priority);
 
+        // build a sorted endpoints per ServiceInfo.
         let protocols = self.connection_attempt_protocols();
-        let ech_config = self.ech_config();
-
-        // Per-ServiceInfo bucket: hints while A/AAAA are pending, real addresses
-        // once resolved, at that ServiceInfo's port (or the authority port if none).
         let mut endpoints: Vec<Endpoint> = Vec::new();
         for info in &service_infos {
+            let ipv4_addrs: Vec<Ipv4Addr> = self
+                .dns_queries
+                .iter()
+                .filter_map(|q| match q {
+                    DnsQuery::Completed {
+                        target_name,
+                        response: DnsResult::A(Ok(addrs)),
+                        ..
+                    } if target_name == &info.target_name => Some(addrs.as_slice()),
+                    _ => None,
+                })
+                .flatten()
+                .cloned()
+                .collect();
+            let ipv6_addrs: Vec<Ipv6Addr> = self
+                .dns_queries
+                .iter()
+                .filter_map(|q| match q {
+                    DnsQuery::Completed {
+                        target_name,
+                        response: DnsResult::Aaaa(Ok(addrs)),
+                        ..
+                    } if target_name == &info.target_name => Some(addrs.as_slice()),
+                    _ => None,
+                })
+                .flatten()
+                .cloned()
+                .collect();
             let mut bucket =
                 info.flatten_into_endpoints(self.port, &ipv4_addrs, &ipv6_addrs, &protocols);
             bucket.sort_by(|a, b| a.sort_with_config(b, &self.network_config));
             endpoints.extend(bucket);
         }
 
-        // Authority port as the final fallback. When a ServiceInfo without a port
-        // override already generated a bucket for self.port above, the duplicate
-        // endpoints are silently skipped by the attempted-connection filter below.
+        // Fallback to AAAA and A of the original hostname only.
         let mut bucket: Vec<Endpoint> = self
             .dns_queries
             .iter()
             .filter_map(|q| match q {
                 DnsQuery::Completed {
+                    target_name,
                     response: r @ (DnsResult::Aaaa(_) | DnsResult::A(_)),
                     ..
-                } => Some(r),
+                } if target_name.0 == *origin_domain => Some(r),
                 _ => None,
             })
-            .flat_map(|r| r.flatten_into_endpoints(self.port, &protocols, ech_config.clone()))
+            .flat_map(|r| r.flatten_into_endpoints(self.port, &protocols, None))
             .collect();
         bucket.sort_by(|a, b| a.sort_with_config(b, &self.network_config));
         endpoints.extend(bucket);

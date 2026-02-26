@@ -16,6 +16,7 @@ const V6_ADDR: Ipv6Addr = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1);
 const V6_ADDR_2: Ipv6Addr = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 2);
 const V6_ADDR_3: Ipv6Addr = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 3);
 const V4_ADDR: Ipv4Addr = Ipv4Addr::new(192, 0, 2, 1);
+const V4_ADDR_1: Ipv4Addr = Ipv4Addr::new(192, 0, 2, 2);
 const ECH_CONFIG: &[u8] = &[1, 2, 3, 4, 5];
 
 trait HappyEyeballsExt {
@@ -1140,7 +1141,14 @@ fn multiple_target_names() {
             // Getting a positive AAAA for the main host
             (
                 Some(in_dns_aaaa_positive(Id::from(1))),
-                Some(out_attempt_v6_h3(Id::from(4))),
+                Some(Output::AttemptConnection {
+                    id: Id::from(4),
+                    endpoint: Endpoint {
+                        address: SocketAddr::new(V6_ADDR_2.into(), PORT),
+                        protocol: ConnectionAttemptHttpVersions::H3,
+                        ech_config: None,
+                    },
+                }),
             ),
         ],
         now,
@@ -1803,6 +1811,203 @@ fn no_default_alpn() {
                 Some(Output::Failed),
             ),
         ],
+        now,
+    );
+}
+
+#[test]
+fn https_svc1_addresses_trigger_additional_attempts() {
+    const SVC1: &str = "svc1.example.com.";
+
+    let (mut now, mut he) = setup();
+
+    he.expect(
+        vec![
+            (None, Some(out_send_dns_https(Id::from(0)))),
+            (None, Some(out_send_dns_aaaa(Id::from(1)))),
+            (None, Some(out_send_dns_a(Id::from(2)))),
+            (
+                Some(Input::DnsResult {
+                    id: Id::from(0),
+                    result: DnsResult::Https(Ok(vec![
+                        happy_eyeballs::ServiceInfo {
+                            priority: 1,
+                            target_name: HOSTNAME.into(),
+                            alpn_protocols: HashSet::from([HttpVersion::H2, HttpVersion::H3]),
+                            ipv6_hints: vec![],
+                            ipv4_hints: vec![],
+                            ech_config: None,
+                            port: None,
+                        },
+                        happy_eyeballs::ServiceInfo {
+                            priority: 2,
+                            target_name: SVC1.into(),
+                            alpn_protocols: HashSet::from([HttpVersion::H2, HttpVersion::H3]),
+                            ipv6_hints: vec![],
+                            ipv4_hints: vec![],
+                            ech_config: None,
+                            port: None,
+                        },
+                    ])),
+                }),
+                Some(Output::SendDnsQuery {
+                    id: Id::from(3),
+                    hostname: SVC1.into(),
+                    record_type: DnsRecordType::Aaaa,
+                }),
+            ),
+            (
+                None,
+                Some(Output::SendDnsQuery {
+                    id: Id::from(4),
+                    hostname: SVC1.into(),
+                    record_type: DnsRecordType::A,
+                }),
+            ),
+            (None, Some(out_resolution_delay())),
+            (
+                Some(in_dns_aaaa_positive(Id::from(1))),
+                Some(out_attempt_v6_h3(Id::from(5))),
+            ),
+            (
+                Some(in_dns_a_positive(Id::from(2))),
+                Some(out_connection_attempt_delay()),
+            ),
+            (
+                Some(Input::DnsResult {
+                    id: Id::from(3),
+                    result: DnsResult::Aaaa(Ok(vec![V6_ADDR_2])),
+                }),
+                Some(out_connection_attempt_delay()),
+            ),
+            (
+                Some(Input::DnsResult {
+                    id: Id::from(4),
+                    result: DnsResult::A(Ok(vec![V4_ADDR_1])),
+                }),
+                Some(out_connection_attempt_delay()),
+            ),
+        ],
+        now,
+    );
+
+    // Addresses respect HTTPS record priority: P1 (HOSTNAME, priority=1) endpoints
+    // come before P2 (SVC1, priority=2) endpoints.  V6_ADDR:H3 was already
+    // attempted (id=5); the remaining 7 follow in priority order.
+    now += CONNECTION_ATTEMPT_DELAY;
+    he.expect(
+        vec![
+            // (priority=1): V4_ADDR:H3
+            (None, Some(out_attempt_v4_h3(Id::from(6)))),
+            (None, Some(out_connection_attempt_delay())),
+        ],
+        now,
+    );
+
+    now += CONNECTION_ATTEMPT_DELAY;
+    he.expect(
+        vec![
+            // (priority=1): V6_ADDR:H2
+            (None, Some(out_attempt_v6_h2(Id::from(7)))),
+            (None, Some(out_connection_attempt_delay())),
+        ],
+        now,
+    );
+
+    now += CONNECTION_ATTEMPT_DELAY;
+    he.expect(
+        vec![
+            // (priority=1): V4_ADDR:H2
+            (None, Some(out_attempt_v4_h2(Id::from(8)))),
+            (None, Some(out_connection_attempt_delay())),
+        ],
+        now,
+    );
+
+    now += CONNECTION_ATTEMPT_DELAY;
+    he.expect(
+        vec![
+            // (priority=2): V6_ADDR_2:H3
+            (
+                None,
+                Some(Output::AttemptConnection {
+                    id: Id::from(9),
+                    endpoint: Endpoint {
+                        address: SocketAddr::new(V6_ADDR_2.into(), PORT),
+                        protocol: ConnectionAttemptHttpVersions::H3,
+                        ech_config: None,
+                    },
+                }),
+            ),
+            (None, Some(out_connection_attempt_delay())),
+        ],
+        now,
+    );
+
+    now += CONNECTION_ATTEMPT_DELAY;
+    he.expect(
+        vec![
+            // (priority=2): V4_ADDR_1:H3
+            (
+                None,
+                Some(Output::AttemptConnection {
+                    id: Id::from(10),
+                    endpoint: Endpoint {
+                        address: SocketAddr::new(V4_ADDR_1.into(), PORT),
+                        protocol: ConnectionAttemptHttpVersions::H3,
+                        ech_config: None,
+                    },
+                }),
+            ),
+            (None, Some(out_connection_attempt_delay())),
+        ],
+        now,
+    );
+
+    now += CONNECTION_ATTEMPT_DELAY;
+    he.expect(
+        vec![
+            // (priority=2): V6_ADDR_2:H2
+            (
+                None,
+                Some(Output::AttemptConnection {
+                    id: Id::from(11),
+                    endpoint: Endpoint {
+                        address: SocketAddr::new(V6_ADDR_2.into(), PORT),
+                        protocol: ConnectionAttemptHttpVersions::H2,
+                        ech_config: None,
+                    },
+                }),
+            ),
+            (None, Some(out_connection_attempt_delay())),
+        ],
+        now,
+    );
+
+    now += CONNECTION_ATTEMPT_DELAY;
+    he.expect(
+        vec![
+            // (priority=2): V4_ADDR_1:H2
+            (
+                None,
+                Some(Output::AttemptConnection {
+                    id: Id::from(12),
+                    endpoint: Endpoint {
+                        address: SocketAddr::new(V4_ADDR_1.into(), PORT),
+                        protocol: ConnectionAttemptHttpVersions::H2,
+                        ech_config: None,
+                    },
+                }),
+            ),
+            (None, Some(out_connection_attempt_delay())),
+        ],
+        now,
+    );
+
+    now += CONNECTION_ATTEMPT_DELAY;
+    he.expect(
+        // All 8 unique endpoints (4 addresses × 2 protocols) have been attempted.
+        vec![(None, None)],
         now,
     );
 }
