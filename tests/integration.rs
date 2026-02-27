@@ -828,18 +828,9 @@ mod section_6_connection_attempts {
             vec![
                 (
                     Some(in_connection_result_positive(Id::from(3))),
-                    Some(Output::CancelConnection(SocketAddr::new(
-                        V6_ADDR_2.into(),
-                        PORT,
-                    ))),
+                    Some(Output::CancelConnection { id: Id::from(4) }),
                 ),
-                (
-                    None,
-                    Some(Output::CancelConnection(SocketAddr::new(
-                        V4_ADDR.into(),
-                        PORT,
-                    ))),
-                ),
+                (None, Some(Output::CancelConnection { id: Id::from(5) })),
                 (None, Some(Output::Succeeded)),
             ],
             now,
