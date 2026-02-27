@@ -1149,32 +1149,6 @@ impl HappyEyeballs {
         ConnectionAttemptHttpVersions::from_protocols(&protocols)
     }
 
-    /// Get the ECH config from HTTPS DNS records for the current host.
-    fn ech_config(&self) -> Option<Vec<u8>> {
-        let target_name: TargetName = match &self.host {
-            Host::Ipv4(_) | Host::Ipv6(_) => {
-                return None;
-            }
-            Host::Domain(domain) => domain.as_str(),
-        }
-        .into();
-
-        self.dns_queries
-            .iter()
-            .filter_map(|q| match q {
-                DnsQuery::Completed {
-                    response: DnsResult::Https(Ok(infos)),
-                    ..
-                    // TODO: What about other target names?
-                } if *q.target_name() == target_name => {
-                    infos.iter().find_map(|info| info.ech_config.clone())
-                }
-                _ => None,
-            })
-            // TODO: What if there are multiple?
-            .next()
-    }
-
     /// Whether to move on to the connection attempt phase based on the received
     /// DNS responses, not based on a timeout.
     fn move_on_without_timeout(&mut self) -> bool {
