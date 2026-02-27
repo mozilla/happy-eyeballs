@@ -989,11 +989,11 @@ impl HappyEyeballs {
     }
 
     fn next_endpoint_to_attempt(&self) -> Option<Endpoint> {
-        match self.host {
+        let origin_domain = match &self.host {
             Host::Ipv4(ipv4_addr) => {
                 let protocols = self.connection_attempt_protocols();
                 return Some(Endpoint {
-                    address: SocketAddr::new(IpAddr::V4(ipv4_addr), self.port),
+                    address: SocketAddr::new(IpAddr::V4(*ipv4_addr), self.port),
                     protocol: *protocols.iter().next()?,
                     ech_config: None,
                 });
@@ -1001,16 +1001,12 @@ impl HappyEyeballs {
             Host::Ipv6(ipv6_addr) => {
                 let protocols = self.connection_attempt_protocols();
                 return Some(Endpoint {
-                    address: SocketAddr::new(IpAddr::V6(ipv6_addr), self.port),
+                    address: SocketAddr::new(IpAddr::V6(*ipv6_addr), self.port),
                     protocol: *protocols.iter().next()?,
                     ech_config: None,
                 });
             }
-            Host::Domain(_) => {}
-        }
-
-        let Host::Domain(ref origin_domain) = self.host else {
-            unreachable!("IP hosts returned early above");
+            Host::Domain(domain) => domain,
         };
 
         // Collect all ServiceInfos sorted by priority.
