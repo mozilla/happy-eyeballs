@@ -111,7 +111,6 @@ impl DnsResult {
         &self,
         port: u16,
         protocols: &HashSet<ConnectionAttemptHttpVersions>,
-        ech_config: Option<Vec<u8>>,
     ) -> Vec<Endpoint> {
         match self {
             DnsResult::Https(_) => unreachable!(),
@@ -121,12 +120,10 @@ impl DnsResult {
                 .into_iter()
                 .flat_map(|addrs| {
                     addrs.iter().cloned().flat_map(|ip| {
-                        // TODO: way around allocation?
-                        let ech_config = ech_config.clone();
                         protocols.iter().map(move |p| Endpoint {
                             address: SocketAddr::new(IpAddr::V6(ip), port),
                             protocol: *p,
-                            ech_config: ech_config.clone(),
+                            ech_config: None,
                         })
                     })
                 })
@@ -138,12 +135,10 @@ impl DnsResult {
                 .into_iter()
                 .flat_map(|addrs| {
                     addrs.iter().cloned().flat_map(|ip| {
-                        // TODO: way around allocation?
-                        let ech_config = ech_config.clone();
                         protocols.iter().map(move |p| Endpoint {
                             address: SocketAddr::new(IpAddr::V4(ip), port),
                             protocol: *p,
-                            ech_config: ech_config.clone(),
+                            ech_config: None,
                         })
                     })
                 })
@@ -1074,7 +1069,7 @@ impl HappyEyeballs {
                 } if target_name.0 == *origin_domain => Some(r),
                 _ => None,
             })
-            .flat_map(|r| r.flatten_into_endpoints(self.port, &protocols, None))
+            .flat_map(|r| r.flatten_into_endpoints(self.port, &protocols))
             .collect();
         bucket.sort_by(|a, b| a.sort_with_config(b, &self.network_config));
         endpoints.extend(bucket);
