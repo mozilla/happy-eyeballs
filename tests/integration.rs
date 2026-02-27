@@ -1245,6 +1245,66 @@ mod https_port_svcparam_overrides_port_for {
 #[test]
 fn https_port_svcparam_applies_to_resolved_a_and_aaaa() {
     const HTTPS_PORT: u16 = 8443;
+    let (now, mut he) = setup(); // constructed with PORT (443)
+
+    he.expect(
+        vec![
+            (None, Some(out_send_dns_https(Id::from(0)))),
+            (None, Some(out_send_dns_aaaa(Id::from(1)))),
+            (None, Some(out_send_dns_a(Id::from(2)))),
+            // HTTPS record with port=8443, no hints
+            (
+                Some(Input::DnsResult {
+                    id: Id::from(0),
+                    result: DnsResult::Https(Ok(vec![happy_eyeballs::ServiceInfo {
+                        priority: 1,
+                        target_name: HOSTNAME.into(),
+                        alpn_protocols: HashSet::from([HttpVersion::H3, HttpVersion::H2]),
+                        ipv6_hints: vec![],
+                        ipv4_hints: vec![],
+                        ech_config: None,
+                        port: Some(HTTPS_PORT),
+                    }])),
+                }),
+                Some(out_resolution_delay()),
+            ),
+            // Positive AAAA: connection attempt must use port 8443, not 443
+            (
+                Some(in_dns_aaaa_positive(Id::from(1))),
+                Some(Output::AttemptConnection {
+                    id: Id::from(3),
+                    endpoint: Endpoint {
+                        address: SocketAddr::new(V6_ADDR.into(), HTTPS_PORT),
+                        protocol: ConnectionAttemptHttpVersions::H3,
+                        ech_config: None,
+                    },
+                }),
+            ),
+            // Positive A arrives while V6 attempt is still within connection delay
+            (
+                Some(in_dns_a_positive(Id::from(2))),
+                Some(out_connection_attempt_delay()),
+            ),
+            // Positive A arrives while V6 attempt is still within connection delay
+            (
+                Some(in_connection_result_negative(Id::from(3))),
+                Some(Output::AttemptConnection {
+                    id: Id::from(4),
+                    endpoint: Endpoint {
+                        address: SocketAddr::new(V4_ADDR.into(), HTTPS_PORT),
+                        protocol: ConnectionAttemptHttpVersions::H3,
+                        ech_config: None,
+                    },
+                }),
+            ),
+        ],
+        now,
+    );
+}
+
+#[test]
+fn https_port_svcparam_applies_but_fallback_follows() {
+    const HTTPS_PORT: u16 = 8443;
     let (mut now, mut he) = setup(); // constructed with PORT (443)
 
     he.expect(
