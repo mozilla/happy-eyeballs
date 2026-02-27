@@ -22,6 +22,7 @@ const ECH_CONFIG: &[u8] = &[1, 2, 3, 4, 5];
 
 trait HappyEyeballsExt {
     fn expect(&mut self, input_output: Vec<(Option<Input>, Option<Output>)>, now: Instant);
+    fn expect_connection_attempts(&mut self, now: &mut Instant, connections: Vec<Output>);
 }
 
 impl HappyEyeballsExt for HappyEyeballs {
@@ -33,6 +34,18 @@ impl HappyEyeballsExt for HappyEyeballs {
             let output = self.process_output(now);
             assert_eq!(expected_output, output);
         }
+    }
+
+    fn expect_connection_attempts(&mut self, now: &mut Instant, connections: Vec<Output>) {
+        for conn in connections {
+            *now += CONNECTION_ATTEMPT_DELAY;
+            self.expect(
+                vec![(None, Some(conn)), (None, Some(out_connection_attempt_delay()))],
+                *now,
+            );
+        }
+        *now += CONNECTION_ATTEMPT_DELAY;
+        self.expect(vec![(None, None)], *now);
     }
 }
 
@@ -272,6 +285,28 @@ fn out_attempt_v4_h3_custom_port(id: Id) -> Output {
         endpoint: Endpoint {
             address: SocketAddr::new(V4_ADDR.into(), CUSTOM_PORT),
             protocol: ConnectionAttemptHttpVersions::H3,
+            ech_config: None,
+        },
+    }
+}
+
+fn out_attempt_v6_h2_custom_port(id: Id) -> Output {
+    Output::AttemptConnection {
+        id,
+        endpoint: Endpoint {
+            address: SocketAddr::new(V6_ADDR.into(), CUSTOM_PORT),
+            protocol: ConnectionAttemptHttpVersions::H2,
+            ech_config: None,
+        },
+    }
+}
+
+fn out_attempt_v4_h2_custom_port(id: Id) -> Output {
+    Output::AttemptConnection {
+        id,
+        endpoint: Endpoint {
+            address: SocketAddr::new(V4_ADDR.into(), CUSTOM_PORT),
+            protocol: ConnectionAttemptHttpVersions::H2,
             ech_config: None,
         },
     }
@@ -1302,8 +1337,8 @@ fn https_port_svcparam_applies_to_resolved_a_and_aaaa() {
 }
 
 #[test]
-fn https_port_svcparam_applies_but_fallback_follows() {
-    let (mut now, mut he) = setup(); // constructed with PORT (443)
+fn https_port_svcparam_applies_but_fallbacks_follow() {
+    let (mut now, mut he) = setup();
 
     he.expect(
         vec![
@@ -1338,7 +1373,6 @@ fn https_port_svcparam_applies_but_fallback_follows() {
                     },
                 }),
             ),
-            // Positive A arrives while V6 attempt is still within connection delay
             (
                 Some(in_dns_a_positive(Id::from(2))),
                 Some(out_connection_attempt_delay()),
@@ -1347,150 +1381,19 @@ fn https_port_svcparam_applies_but_fallback_follows() {
         now,
     );
 
-    // Endpoints sorted by protocol then IP family (prefer-V6):
-    //   V6:H3, V4:H3, V6:H2, V4:H2 — all on port 8443.
-
-    now += CONNECTION_ATTEMPT_DELAY;
-    he.expect(
+    // Connection attempts using custom port: V6:H3, V4:H3, V6:H2, V4:H2, then
+    // fallback on port 443.
+    he.expect_connection_attempts(
+        &mut now,
         vec![
-            (
-                None,
-                Some(Output::AttemptConnection {
-                    id: Id::from(4),
-                    endpoint: Endpoint {
-                        address: SocketAddr::new(V4_ADDR.into(), CUSTOM_PORT),
-                        protocol: ConnectionAttemptHttpVersions::H3,
-                        ech_config: None,
-                    },
-                }),
-            ),
-            (None, Some(out_connection_attempt_delay())),
+            out_attempt_v4_h3_custom_port(Id::from(4)),
+            out_attempt_v6_h2_custom_port(Id::from(5)),
+            out_attempt_v4_h2_custom_port(Id::from(6)),
+            out_attempt_v6_h3(Id::from(7)),
+            out_attempt_v4_h3(Id::from(8)),
+            out_attempt_v6_h2(Id::from(9)),
+            out_attempt_v4_h2(Id::from(10)),
         ],
-        now,
-    );
-
-    now += CONNECTION_ATTEMPT_DELAY;
-    he.expect(
-        vec![
-            (
-                None,
-                Some(Output::AttemptConnection {
-                    id: Id::from(5),
-                    endpoint: Endpoint {
-                        address: SocketAddr::new(V6_ADDR.into(), CUSTOM_PORT),
-                        protocol: ConnectionAttemptHttpVersions::H2,
-                        ech_config: None,
-                    },
-                }),
-            ),
-            (None, Some(out_connection_attempt_delay())),
-        ],
-        now,
-    );
-
-    now += CONNECTION_ATTEMPT_DELAY;
-    he.expect(
-        vec![
-            (
-                None,
-                Some(Output::AttemptConnection {
-                    id: Id::from(6),
-                    endpoint: Endpoint {
-                        address: SocketAddr::new(V4_ADDR.into(), CUSTOM_PORT),
-                        protocol: ConnectionAttemptHttpVersions::H2,
-                        ech_config: None,
-                    },
-                }),
-            ),
-            // V4:H2 is still within its connection delay.
-            (None, Some(out_connection_attempt_delay())),
-        ],
-        now,
-    );
-
-    // Fallback bucket: port 443, same sort order.
-
-    now += CONNECTION_ATTEMPT_DELAY;
-    he.expect(
-        vec![
-            (
-                None,
-                Some(Output::AttemptConnection {
-                    id: Id::from(7),
-                    endpoint: Endpoint {
-                        address: SocketAddr::new(V6_ADDR.into(), PORT),
-                        protocol: ConnectionAttemptHttpVersions::H3,
-                        ech_config: None,
-                    },
-                }),
-            ),
-            (None, Some(out_connection_attempt_delay())),
-        ],
-        now,
-    );
-
-    now += CONNECTION_ATTEMPT_DELAY;
-    he.expect(
-        vec![
-            (
-                None,
-                Some(Output::AttemptConnection {
-                    id: Id::from(8),
-                    endpoint: Endpoint {
-                        address: SocketAddr::new(V4_ADDR.into(), PORT),
-                        protocol: ConnectionAttemptHttpVersions::H3,
-                        ech_config: None,
-                    },
-                }),
-            ),
-            (None, Some(out_connection_attempt_delay())),
-        ],
-        now,
-    );
-
-    now += CONNECTION_ATTEMPT_DELAY;
-    he.expect(
-        vec![
-            (
-                None,
-                Some(Output::AttemptConnection {
-                    id: Id::from(9),
-                    endpoint: Endpoint {
-                        address: SocketAddr::new(V6_ADDR.into(), PORT),
-                        protocol: ConnectionAttemptHttpVersions::H2,
-                        ech_config: None,
-                    },
-                }),
-            ),
-            (None, Some(out_connection_attempt_delay())),
-        ],
-        now,
-    );
-
-    now += CONNECTION_ATTEMPT_DELAY;
-    he.expect(
-        vec![
-            (
-                None,
-                Some(Output::AttemptConnection {
-                    id: Id::from(10),
-                    endpoint: Endpoint {
-                        address: SocketAddr::new(V4_ADDR.into(), PORT),
-                        protocol: ConnectionAttemptHttpVersions::H2,
-                        ech_config: None,
-                    },
-                }),
-            ),
-            (None, Some(out_connection_attempt_delay())),
-        ],
-        now,
-    );
-
-    now += CONNECTION_ATTEMPT_DELAY;
-    he.expect(
-        // No more endpoints; all eight connections still in progress.
-        vec![(None, None)],
-        now,
     );
 }
 
