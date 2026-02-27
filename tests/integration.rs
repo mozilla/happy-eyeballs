@@ -16,7 +16,7 @@ const V6_ADDR: Ipv6Addr = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1);
 const V6_ADDR_2: Ipv6Addr = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 2);
 const V6_ADDR_3: Ipv6Addr = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 3);
 const V4_ADDR: Ipv4Addr = Ipv4Addr::new(192, 0, 2, 1);
-const V4_ADDR_1: Ipv4Addr = Ipv4Addr::new(192, 0, 2, 2);
+const V4_ADDR_2: Ipv4Addr = Ipv4Addr::new(192, 0, 2, 2);
 const ECH_CONFIG: &[u8] = &[1, 2, 3, 4, 5];
 
 trait HappyEyeballsExt {
@@ -1874,7 +1874,7 @@ fn https_svc1_addresses_trigger_additional_attempts() {
             (
                 Some(Input::DnsResult {
                     id: Id::from(4),
-                    result: DnsResult::A(Ok(vec![V4_ADDR_1])),
+                    result: DnsResult::A(Ok(vec![V4_ADDR_2])),
                 }),
                 Some(out_connection_attempt_delay()),
             ),
@@ -1944,7 +1944,7 @@ fn https_svc1_addresses_trigger_additional_attempts() {
                 Some(Output::AttemptConnection {
                     id: Id::from(10),
                     endpoint: Endpoint {
-                        address: SocketAddr::new(V4_ADDR_1.into(), PORT),
+                        address: SocketAddr::new(V4_ADDR_2.into(), PORT),
                         protocol: ConnectionAttemptHttpVersions::H3,
                         ech_config: None,
                     },
@@ -1984,7 +1984,7 @@ fn https_svc1_addresses_trigger_additional_attempts() {
                 Some(Output::AttemptConnection {
                     id: Id::from(12),
                     endpoint: Endpoint {
-                        address: SocketAddr::new(V4_ADDR_1.into(), PORT),
+                        address: SocketAddr::new(V4_ADDR_2.into(), PORT),
                         protocol: ConnectionAttemptHttpVersions::H2,
                         ech_config: None,
                     },
