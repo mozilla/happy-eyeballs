@@ -1,6 +1,6 @@
 use std::{
     collections::HashSet,
-    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     time::Instant,
 };
 
@@ -1416,6 +1416,13 @@ fn https_two_service_infos_with_different_ports() {
     const PORT_2: u16 = 20008;
     let (mut now, mut he) = setup(); // PORT = 443
 
+    let attempt = |id: u64, addr: IpAddr, port: u16, protocol: ConnectionAttemptHttpVersions| {
+        Output::AttemptConnection {
+            id: Id::from(id),
+            endpoint: Endpoint { address: SocketAddr::new(addr, port), protocol, ech_config: None },
+        }
+    };
+
     he.expect(
         vec![
             (None, Some(out_send_dns_https(Id::from(0)))),
@@ -1451,14 +1458,7 @@ fn https_two_service_infos_with_different_ports() {
             // AAAA arrives; move-on criteria met. First bucket is PORT_1.
             (
                 Some(in_dns_aaaa_positive(Id::from(1))),
-                Some(Output::AttemptConnection {
-                    id: Id::from(3),
-                    endpoint: Endpoint {
-                        address: SocketAddr::new(V6_ADDR.into(), PORT_1),
-                        protocol: ConnectionAttemptHttpVersions::H3,
-                        ech_config: None,
-                    },
-                }),
+                Some(attempt(3, V6_ADDR.into(), PORT_1, ConnectionAttemptHttpVersions::H3)),
             ),
             (None, Some(out_connection_attempt_delay())),
             (
@@ -1469,223 +1469,24 @@ fn https_two_service_infos_with_different_ports() {
         now,
     );
 
-    // Priority-1 bucket (port 20007): V4:H3, V6:H2, V4:H2.
-    now += CONNECTION_ATTEMPT_DELAY;
-    he.expect(
+    he.expect_connection_attempts(
+        &mut now,
         vec![
-            (
-                None,
-                Some(Output::AttemptConnection {
-                    id: Id::from(4),
-                    endpoint: Endpoint {
-                        address: SocketAddr::new(V4_ADDR.into(), PORT_1),
-                        protocol: ConnectionAttemptHttpVersions::H3,
-                        ech_config: None,
-                    },
-                }),
-            ),
-            (None, Some(out_connection_attempt_delay())),
+            // Priority-1 bucket (port 20007): V4:H3, V6:H2, V4:H2.
+            attempt(4, V4_ADDR.into(), PORT_1, ConnectionAttemptHttpVersions::H3),
+            attempt(5, V6_ADDR.into(), PORT_1, ConnectionAttemptHttpVersions::H2),
+            attempt(6, V4_ADDR.into(), PORT_1, ConnectionAttemptHttpVersions::H2),
+            // Priority-2 bucket (port 20008).
+            attempt(7, V6_ADDR.into(), PORT_2, ConnectionAttemptHttpVersions::H3),
+            attempt(8, V4_ADDR.into(), PORT_2, ConnectionAttemptHttpVersions::H3),
+            attempt(9, V6_ADDR.into(), PORT_2, ConnectionAttemptHttpVersions::H2),
+            attempt(10, V4_ADDR.into(), PORT_2, ConnectionAttemptHttpVersions::H2),
+            // Fallback bucket (port 443).
+            out_attempt_v6_h3(Id::from(11)),
+            out_attempt_v4_h3(Id::from(12)),
+            out_attempt_v6_h2(Id::from(13)),
+            out_attempt_v4_h2(Id::from(14)),
         ],
-        now,
-    );
-
-    now += CONNECTION_ATTEMPT_DELAY;
-    he.expect(
-        vec![
-            (
-                None,
-                Some(Output::AttemptConnection {
-                    id: Id::from(5),
-                    endpoint: Endpoint {
-                        address: SocketAddr::new(V6_ADDR.into(), PORT_1),
-                        protocol: ConnectionAttemptHttpVersions::H2,
-                        ech_config: None,
-                    },
-                }),
-            ),
-            (None, Some(out_connection_attempt_delay())),
-        ],
-        now,
-    );
-
-    now += CONNECTION_ATTEMPT_DELAY;
-    he.expect(
-        vec![
-            (
-                None,
-                Some(Output::AttemptConnection {
-                    id: Id::from(6),
-                    endpoint: Endpoint {
-                        address: SocketAddr::new(V4_ADDR.into(), PORT_1),
-                        protocol: ConnectionAttemptHttpVersions::H2,
-                        ech_config: None,
-                    },
-                }),
-            ),
-            (None, Some(out_connection_attempt_delay())),
-        ],
-        now,
-    );
-
-    // Priority-2 bucket (port 20008).
-    now += CONNECTION_ATTEMPT_DELAY;
-    he.expect(
-        vec![
-            (
-                None,
-                Some(Output::AttemptConnection {
-                    id: Id::from(7),
-                    endpoint: Endpoint {
-                        address: SocketAddr::new(V6_ADDR.into(), PORT_2),
-                        protocol: ConnectionAttemptHttpVersions::H3,
-                        ech_config: None,
-                    },
-                }),
-            ),
-            (None, Some(out_connection_attempt_delay())),
-        ],
-        now,
-    );
-
-    now += CONNECTION_ATTEMPT_DELAY;
-    he.expect(
-        vec![
-            (
-                None,
-                Some(Output::AttemptConnection {
-                    id: Id::from(8),
-                    endpoint: Endpoint {
-                        address: SocketAddr::new(V4_ADDR.into(), PORT_2),
-                        protocol: ConnectionAttemptHttpVersions::H3,
-                        ech_config: None,
-                    },
-                }),
-            ),
-            (None, Some(out_connection_attempt_delay())),
-        ],
-        now,
-    );
-
-    now += CONNECTION_ATTEMPT_DELAY;
-    he.expect(
-        vec![
-            (
-                None,
-                Some(Output::AttemptConnection {
-                    id: Id::from(9),
-                    endpoint: Endpoint {
-                        address: SocketAddr::new(V6_ADDR.into(), PORT_2),
-                        protocol: ConnectionAttemptHttpVersions::H2,
-                        ech_config: None,
-                    },
-                }),
-            ),
-            (None, Some(out_connection_attempt_delay())),
-        ],
-        now,
-    );
-
-    now += CONNECTION_ATTEMPT_DELAY;
-    he.expect(
-        vec![
-            (
-                None,
-                Some(Output::AttemptConnection {
-                    id: Id::from(10),
-                    endpoint: Endpoint {
-                        address: SocketAddr::new(V4_ADDR.into(), PORT_2),
-                        protocol: ConnectionAttemptHttpVersions::H2,
-                        ech_config: None,
-                    },
-                }),
-            ),
-            (None, Some(out_connection_attempt_delay())),
-        ],
-        now,
-    );
-
-    // Fallback bucket (port 443).
-    now += CONNECTION_ATTEMPT_DELAY;
-    he.expect(
-        vec![
-            (
-                None,
-                Some(Output::AttemptConnection {
-                    id: Id::from(11),
-                    endpoint: Endpoint {
-                        address: SocketAddr::new(V6_ADDR.into(), PORT),
-                        protocol: ConnectionAttemptHttpVersions::H3,
-                        ech_config: None,
-                    },
-                }),
-            ),
-            (None, Some(out_connection_attempt_delay())),
-        ],
-        now,
-    );
-
-    now += CONNECTION_ATTEMPT_DELAY;
-    he.expect(
-        vec![
-            (
-                None,
-                Some(Output::AttemptConnection {
-                    id: Id::from(12),
-                    endpoint: Endpoint {
-                        address: SocketAddr::new(V4_ADDR.into(), PORT),
-                        protocol: ConnectionAttemptHttpVersions::H3,
-                        ech_config: None,
-                    },
-                }),
-            ),
-            (None, Some(out_connection_attempt_delay())),
-        ],
-        now,
-    );
-
-    now += CONNECTION_ATTEMPT_DELAY;
-    he.expect(
-        vec![
-            (
-                None,
-                Some(Output::AttemptConnection {
-                    id: Id::from(13),
-                    endpoint: Endpoint {
-                        address: SocketAddr::new(V6_ADDR.into(), PORT),
-                        protocol: ConnectionAttemptHttpVersions::H2,
-                        ech_config: None,
-                    },
-                }),
-            ),
-            (None, Some(out_connection_attempt_delay())),
-        ],
-        now,
-    );
-
-    now += CONNECTION_ATTEMPT_DELAY;
-    he.expect(
-        vec![
-            (
-                None,
-                Some(Output::AttemptConnection {
-                    id: Id::from(14),
-                    endpoint: Endpoint {
-                        address: SocketAddr::new(V4_ADDR.into(), PORT),
-                        protocol: ConnectionAttemptHttpVersions::H2,
-                        ech_config: None,
-                    },
-                }),
-            ),
-            (None, Some(out_connection_attempt_delay())),
-        ],
-        now,
-    );
-
-    now += CONNECTION_ATTEMPT_DELAY;
-    he.expect(
-        // No more endpoints; all twelve connections still in progress.
-        vec![(None, None)],
-        now,
     );
 }
 
