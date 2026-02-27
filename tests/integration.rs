@@ -1180,99 +1180,66 @@ fn alt_svc_used_immediately() {
     );
 }
 
-#[test]
-fn https_port_svcparam_overrides_port_for_hints() {
-    const HTTPS_PORT: u16 = 8443;
-    let (now, mut he) = setup(); // constructed with PORT (443)
+mod https_port_svcparam_overrides_port_for {
+    use super::*;
 
-    he.expect(
-        vec![
-            (None, Some(out_send_dns_https(Id::from(0)))),
-            (None, Some(out_send_dns_aaaa(Id::from(1)))),
-            (None, Some(out_send_dns_a(Id::from(2)))),
-            (
-                Some(in_dns_aaaa_negative(Id::from(1))),
-                Some(out_resolution_delay()),
-            ),
-            (
-                Some(in_dns_a_negative(Id::from(2))),
-                Some(out_resolution_delay()),
-            ),
-            // HTTPS record carries port=8443 and an IPv6 hint; the connection
-            // attempt must use 8443, not the authority port 443.
-            (
-                Some(Input::DnsResult {
-                    id: Id::from(0),
-                    result: DnsResult::Https(Ok(vec![happy_eyeballs::ServiceInfo {
-                        priority: 1,
-                        target_name: HOSTNAME.into(),
-                        alpn_protocols: HashSet::from([HttpVersion::H3, HttpVersion::H2]),
-                        ipv6_hints: vec![V6_ADDR],
-                        ipv4_hints: vec![],
-                        ech_config: None,
-                        port: Some(HTTPS_PORT),
-                    }])),
-                }),
-                Some(Output::AttemptConnection {
-                    id: Id::from(3),
-                    endpoint: Endpoint {
-                        address: SocketAddr::new(V6_ADDR.into(), HTTPS_PORT),
-                        protocol: ConnectionAttemptHttpVersions::H3,
-                        ech_config: None,
-                    },
-                }),
-            ),
-        ],
-        now,
-    );
-}
+    fn check(ipv4_hints: Vec<Ipv4Addr>) {
+        const HTTPS_PORT: u16 = 8443;
+        let (now, mut he) = setup(); // constructed with PORT (443)
 
-/// HTTPS record with both IPv4 and IPv6 hints and a `port` SvcParam: both
-/// families use the overridden port.
-#[test]
-fn https_port_svcparam_overrides_port_for_v4_and_v6_hints() {
-    const HTTPS_PORT: u16 = 8443;
-    let (now, mut he) = setup(); // constructed with PORT (443)
+        he.expect(
+            vec![
+                (None, Some(out_send_dns_https(Id::from(0)))),
+                (None, Some(out_send_dns_aaaa(Id::from(1)))),
+                (None, Some(out_send_dns_a(Id::from(2)))),
+                (
+                    Some(in_dns_aaaa_negative(Id::from(1))),
+                    Some(out_resolution_delay()),
+                ),
+                (
+                    Some(in_dns_a_negative(Id::from(2))),
+                    Some(out_resolution_delay()),
+                ),
+                // HTTPS record carries port=8443; the connection attempt must use
+                // 8443, not the authority port 443. IPv6 is preferred.
+                (
+                    Some(Input::DnsResult {
+                        id: Id::from(0),
+                        result: DnsResult::Https(Ok(vec![happy_eyeballs::ServiceInfo {
+                            priority: 1,
+                            target_name: HOSTNAME.into(),
+                            alpn_protocols: HashSet::from([HttpVersion::H3, HttpVersion::H2]),
+                            ipv6_hints: vec![V6_ADDR],
+                            ipv4_hints,
+                            ech_config: None,
+                            port: Some(HTTPS_PORT),
+                        }])),
+                    }),
+                    Some(Output::AttemptConnection {
+                        id: Id::from(3),
+                        endpoint: Endpoint {
+                            address: SocketAddr::new(V6_ADDR.into(), HTTPS_PORT),
+                            protocol: ConnectionAttemptHttpVersions::H3,
+                            ech_config: None,
+                        },
+                    }),
+                ),
+            ],
+            now,
+        );
+    }
 
-    he.expect(
-        vec![
-            (None, Some(out_send_dns_https(Id::from(0)))),
-            (None, Some(out_send_dns_aaaa(Id::from(1)))),
-            (None, Some(out_send_dns_a(Id::from(2)))),
-            (
-                Some(in_dns_aaaa_negative(Id::from(1))),
-                Some(out_resolution_delay()),
-            ),
-            (
-                Some(in_dns_a_negative(Id::from(2))),
-                Some(out_resolution_delay()),
-            ),
-            (
-                Some(Input::DnsResult {
-                    id: Id::from(0),
-                    result: DnsResult::Https(Ok(vec![happy_eyeballs::ServiceInfo {
-                        priority: 1,
-                        target_name: HOSTNAME.into(),
-                        alpn_protocols: HashSet::from([HttpVersion::H3, HttpVersion::H2]),
-                        ipv6_hints: vec![V6_ADDR],
-                        ipv4_hints: vec![V4_ADDR],
-                        ech_config: None,
-                        port: Some(HTTPS_PORT),
-                    }])),
-                }),
-                // IPv6 is preferred; first attempt should be on the HTTPS port.
-                Some(Output::AttemptConnection {
-                    id: Id::from(3),
-                    endpoint: Endpoint {
-                        address: SocketAddr::new(V6_ADDR.into(), HTTPS_PORT),
-                        protocol: ConnectionAttemptHttpVersions::H3,
-                        ech_config: None,
-                    },
-                }),
-            ),
-        ],
-        now,
-    );
+    #[test]
+    fn v6_hints() {
+        check(vec![]);
+    }
+
+    /// HTTPS record with both IPv4 and IPv6 hints and a `port` SvcParam: both
+    /// families use the overridden port.
+    #[test]
+    fn v4_and_v6_hints() {
+        check(vec![V4_ADDR]);
+    }
 }
 
 #[test]
