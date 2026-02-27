@@ -12,6 +12,7 @@ use happy_eyeballs::{
 
 const HOSTNAME: &str = "example.com";
 const PORT: u16 = 443;
+const CUSTOM_PORT: u16 = 8443;
 const V6_ADDR: Ipv6Addr = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1);
 const V6_ADDR_2: Ipv6Addr = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 2);
 const V6_ADDR_3: Ipv6Addr = Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 3);
@@ -221,6 +222,17 @@ fn out_attempt_v6_h3(id: Id) -> Output {
     }
 }
 
+fn out_attempt_v6_h3_custom_port(id: Id) -> Output {
+    Output::AttemptConnection {
+        id,
+        endpoint: Endpoint {
+            address: SocketAddr::new(V6_ADDR.into(), CUSTOM_PORT),
+            protocol: ConnectionAttemptHttpVersions::H3,
+            ech_config: None,
+        },
+    }
+}
+
 fn out_attempt_v4_h1_h2(id: Id) -> Output {
     Output::AttemptConnection {
         id,
@@ -248,6 +260,17 @@ fn out_attempt_v4_h3(id: Id) -> Output {
         id,
         endpoint: Endpoint {
             address: SocketAddr::new(V4_ADDR.into(), PORT),
+            protocol: ConnectionAttemptHttpVersions::H3,
+            ech_config: None,
+        },
+    }
+}
+
+fn out_attempt_v4_h3_custom_port(id: Id) -> Output {
+    Output::AttemptConnection {
+        id,
+        endpoint: Endpoint {
+            address: SocketAddr::new(V4_ADDR.into(), CUSTOM_PORT),
             protocol: ConnectionAttemptHttpVersions::H3,
             ech_config: None,
         },
@@ -1184,7 +1207,6 @@ mod https_port_svcparam_overrides_port_for {
     use super::*;
 
     fn check(ipv4_hints: Vec<Ipv4Addr>) {
-        const HTTPS_PORT: u16 = 8443;
         let (now, mut he) = setup(); // constructed with PORT (443)
 
         he.expect(
@@ -1212,17 +1234,10 @@ mod https_port_svcparam_overrides_port_for {
                             ipv6_hints: vec![V6_ADDR],
                             ipv4_hints,
                             ech_config: None,
-                            port: Some(HTTPS_PORT),
+                            port: Some(CUSTOM_PORT),
                         }])),
                     }),
-                    Some(Output::AttemptConnection {
-                        id: Id::from(3),
-                        endpoint: Endpoint {
-                            address: SocketAddr::new(V6_ADDR.into(), HTTPS_PORT),
-                            protocol: ConnectionAttemptHttpVersions::H3,
-                            ech_config: None,
-                        },
-                    }),
+                    Some(out_attempt_v6_h3_custom_port(Id::from(3))),
                 ),
             ],
             now,
@@ -1244,7 +1259,6 @@ mod https_port_svcparam_overrides_port_for {
 
 #[test]
 fn https_port_svcparam_applies_to_resolved_a_and_aaaa() {
-    const HTTPS_PORT: u16 = 8443;
     let (now, mut he) = setup(); // constructed with PORT (443)
 
     he.expect(
@@ -1263,7 +1277,7 @@ fn https_port_svcparam_applies_to_resolved_a_and_aaaa() {
                         ipv6_hints: vec![],
                         ipv4_hints: vec![],
                         ech_config: None,
-                        port: Some(HTTPS_PORT),
+                        port: Some(CUSTOM_PORT),
                     }])),
                 }),
                 Some(out_resolution_delay()),
@@ -1271,31 +1285,16 @@ fn https_port_svcparam_applies_to_resolved_a_and_aaaa() {
             // Positive AAAA: connection attempt must use port 8443, not 443
             (
                 Some(in_dns_aaaa_positive(Id::from(1))),
-                Some(Output::AttemptConnection {
-                    id: Id::from(3),
-                    endpoint: Endpoint {
-                        address: SocketAddr::new(V6_ADDR.into(), HTTPS_PORT),
-                        protocol: ConnectionAttemptHttpVersions::H3,
-                        ech_config: None,
-                    },
-                }),
+                Some(out_attempt_v6_h3_custom_port(Id::from(3))),
             ),
-            // Positive A arrives while V6 attempt is still within connection delay
             (
                 Some(in_dns_a_positive(Id::from(2))),
                 Some(out_connection_attempt_delay()),
             ),
-            // Positive A arrives while V6 attempt is still within connection delay
+            // Positive A: connection attempt must use port 8443, not 443
             (
                 Some(in_connection_result_negative(Id::from(3))),
-                Some(Output::AttemptConnection {
-                    id: Id::from(4),
-                    endpoint: Endpoint {
-                        address: SocketAddr::new(V4_ADDR.into(), HTTPS_PORT),
-                        protocol: ConnectionAttemptHttpVersions::H3,
-                        ech_config: None,
-                    },
-                }),
+                Some(out_attempt_v4_h3_custom_port(Id::from(4))),
             ),
         ],
         now,
@@ -1304,7 +1303,6 @@ fn https_port_svcparam_applies_to_resolved_a_and_aaaa() {
 
 #[test]
 fn https_port_svcparam_applies_but_fallback_follows() {
-    const HTTPS_PORT: u16 = 8443;
     let (mut now, mut he) = setup(); // constructed with PORT (443)
 
     he.expect(
@@ -1323,7 +1321,7 @@ fn https_port_svcparam_applies_but_fallback_follows() {
                         ipv6_hints: vec![],
                         ipv4_hints: vec![],
                         ech_config: None,
-                        port: Some(HTTPS_PORT),
+                        port: Some(CUSTOM_PORT),
                     }])),
                 }),
                 Some(out_resolution_delay()),
@@ -1334,7 +1332,7 @@ fn https_port_svcparam_applies_but_fallback_follows() {
                 Some(Output::AttemptConnection {
                     id: Id::from(3),
                     endpoint: Endpoint {
-                        address: SocketAddr::new(V6_ADDR.into(), HTTPS_PORT),
+                        address: SocketAddr::new(V6_ADDR.into(), CUSTOM_PORT),
                         protocol: ConnectionAttemptHttpVersions::H3,
                         ech_config: None,
                     },
@@ -1360,7 +1358,7 @@ fn https_port_svcparam_applies_but_fallback_follows() {
                 Some(Output::AttemptConnection {
                     id: Id::from(4),
                     endpoint: Endpoint {
-                        address: SocketAddr::new(V4_ADDR.into(), HTTPS_PORT),
+                        address: SocketAddr::new(V4_ADDR.into(), CUSTOM_PORT),
                         protocol: ConnectionAttemptHttpVersions::H3,
                         ech_config: None,
                     },
@@ -1379,7 +1377,7 @@ fn https_port_svcparam_applies_but_fallback_follows() {
                 Some(Output::AttemptConnection {
                     id: Id::from(5),
                     endpoint: Endpoint {
-                        address: SocketAddr::new(V6_ADDR.into(), HTTPS_PORT),
+                        address: SocketAddr::new(V6_ADDR.into(), CUSTOM_PORT),
                         protocol: ConnectionAttemptHttpVersions::H2,
                         ech_config: None,
                     },
@@ -1398,7 +1396,7 @@ fn https_port_svcparam_applies_but_fallback_follows() {
                 Some(Output::AttemptConnection {
                     id: Id::from(6),
                     endpoint: Endpoint {
-                        address: SocketAddr::new(V4_ADDR.into(), HTTPS_PORT),
+                        address: SocketAddr::new(V4_ADDR.into(), CUSTOM_PORT),
                         protocol: ConnectionAttemptHttpVersions::H2,
                         ech_config: None,
                     },
