@@ -75,12 +75,7 @@ pub enum Input {
     DnsResult { id: Id, result: DnsResult },
 
     /// Connection attempt result
-    ConnectionResult {
-        id: Id,
-        result: Result<(), String>,
-        // TODO: When attempting a connection with ECH, the remote might send a
-        // new ECH config to us on failure. That might be carried in this event?
-    },
+    ConnectionResult { id: Id, result: Result<(), String> },
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -190,7 +185,6 @@ pub enum Output {
         endpoint: Endpoint,
     },
 
-    // TODO: Consider a CancelSendDnsQuery.
     /// Cancel a connection attempt
     CancelConnection {
         id: Id,
@@ -224,7 +218,6 @@ pub enum DnsRecordType {
 pub struct ServiceInfo {
     pub priority: u16,
     pub target_name: TargetName,
-    // TODO: Should handle ordering? HashSet looses ordering.
     pub alpn_protocols: HashSet<HttpVersion>,
     pub ech_config: Option<Vec<u8>>,
     pub ipv4_hints: Vec<Ipv4Addr>,
@@ -287,6 +280,12 @@ impl ServiceInfo {
             &[]
         };
 
+        let hint_protocols: HashSet<ConnectionAttemptHttpVersions> =
+            ConnectionAttemptHttpVersions::from_protocols(&self.alpn_protocols)
+                .intersection(protocols)
+                .cloned()
+                .collect();
+
         let hints = hint_v6
             .iter()
             .cloned()
@@ -295,14 +294,11 @@ impl ServiceInfo {
             .flat_map(|ip| {
                 // TODO: way around allocation?
                 let ech_config = self.ech_config.clone();
-                ConnectionAttemptHttpVersions::from_protocols(&self.alpn_protocols)
-                    .into_iter()
-                    .map(move |protocol| Endpoint {
-                        address: SocketAddr::new(ip, port),
-                        // TODO: Only take the overlap with HappyEyeballs::protocols().
-                        protocol,
-                        ech_config: ech_config.clone(),
-                    })
+                hint_protocols.iter().map(move |&protocol| Endpoint {
+                    address: SocketAddr::new(ip, port),
+                    protocol,
+                    ech_config: ech_config.clone(),
+                })
             });
 
         let addrs = ipv6_addrs
@@ -456,12 +452,6 @@ pub struct AltSvc {
     pub protocol: HttpVersion,
 }
 
-// TODO: Allow user to provide alt-svc information from previous connections.
-//
-// TODO: We need to track whether HTTP RR DNS is enabled or disabled. There is a pref for it in Firefox.
-//
-// TODO: We need to track whether ECH is enabled or disabled. There is a pref for it in Firefox.
-//
 // TODO: Should we make HappyEyeballs proxy aware? E.g. should it know that the
 // proxy is resolving the domain? Should it still trigger an HTTP RR lookup to
 // see whether the remote supports HTTP/3? Should it first do MASQUE connect-udp

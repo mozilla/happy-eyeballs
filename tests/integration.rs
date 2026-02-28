@@ -703,6 +703,37 @@ mod section_4_hostname_resolution {
         );
     }
 
+    /// A ServiceInfo advertising H3 must not produce an H3 connection attempt
+    /// when H3 is disabled in the network config.
+    #[test]
+    fn https_h3_disabled() {
+        let (now, mut he) = setup_with_config(NetworkConfig {
+            http_versions: HttpVersions {
+                h1: true,
+                h2: true,
+                h3: false,
+            },
+            ..NetworkConfig::default()
+        });
+
+        he.expect(
+            vec![
+                (None, Some(out_send_dns_https(Id::from(0)))),
+                (None, Some(out_send_dns_aaaa(Id::from(1)))),
+                (None, Some(out_send_dns_a(Id::from(2)))),
+                (
+                    Some(in_dns_aaaa_positive(Id::from(1))),
+                    Some(out_resolution_delay()),
+                ),
+                (
+                    Some(in_dns_https_positive(Id::from(0))),
+                    Some(out_attempt_v6_h2(Id::from(3))),
+                ),
+            ],
+            now,
+        );
+    }
+
     #[test]
     fn multiple_ips_per_record() {
         let (mut now, mut he) = setup();
