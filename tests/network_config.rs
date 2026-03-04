@@ -32,7 +32,7 @@ fn alt_svc_construction() {
         alt_svc: vec![AltSvc {
             host: None,
             port: None,
-            protocol: HttpVersion::H3,
+            http_version: HttpVersion::H3,
         }],
     };
     let mut he = HappyEyeballs::new_with_network_config(HOSTNAME, PORT, config).unwrap();
@@ -50,7 +50,7 @@ fn alt_svc_used_immediately() {
         alt_svc: vec![AltSvc {
             host: None,
             port: None,
-            protocol: HttpVersion::H3,
+            http_version: HttpVersion::H3,
         }],
     };
     let mut he = HappyEyeballs::new_with_network_config(HOSTNAME, PORT, config).unwrap();

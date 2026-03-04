@@ -36,7 +36,7 @@ fn ech_config_propagated_to_endpoint() {
                     result: DnsResult::Https(Ok(vec![ServiceInfo {
                         priority: 1,
                         target_name: HOSTNAME.into(),
-                        alpn_protocols: HashSet::from([HttpVersion::H3, HttpVersion::H2]),
+                        alpn_http_versions: HashSet::from([HttpVersion::H3, HttpVersion::H2]),
                         ipv6_hints: vec![V6_ADDR],
                         ipv4_hints: vec![],
                         ech_config: Some(ECH_CONFIG.to_vec()),
@@ -47,7 +47,7 @@ fn ech_config_propagated_to_endpoint() {
                     id: Id::from(3),
                     endpoint: Endpoint {
                         address: SocketAddr::new(V6_ADDR.into(), PORT),
-                        protocol: ConnectionAttemptHttpVersions::H3,
+                        http_version: ConnectionAttemptHttpVersions::H3,
                         ech_config: Some(ECH_CONFIG.to_vec()),
                     },
                 }),
@@ -72,7 +72,7 @@ fn ech_config_from_https_applies_to_aaaa() {
                     result: DnsResult::Https(Ok(vec![ServiceInfo {
                         priority: 1,
                         target_name: HOSTNAME.into(),
-                        alpn_protocols: HashSet::from([HttpVersion::H3, HttpVersion::H2]),
+                        alpn_http_versions: HashSet::from([HttpVersion::H3, HttpVersion::H2]),
                         ipv6_hints: vec![],
                         ipv4_hints: vec![],
                         ech_config: Some(ECH_CONFIG.to_vec()),
@@ -87,7 +87,7 @@ fn ech_config_from_https_applies_to_aaaa() {
                     id: Id::from(3),
                     endpoint: Endpoint {
                         address: SocketAddr::new(V6_ADDR.into(), PORT),
-                        protocol: ConnectionAttemptHttpVersions::H3,
+                        http_version: ConnectionAttemptHttpVersions::H3,
                         ech_config: Some(ECH_CONFIG.to_vec()),
                     },
                 }),
@@ -119,7 +119,7 @@ fn multiple_target_names() {
                     id: Id::from(4),
                     endpoint: Endpoint {
                         address: SocketAddr::new(V6_ADDR_2.into(), PORT),
-                        protocol: ConnectionAttemptHttpVersions::H3,
+                        http_version: ConnectionAttemptHttpVersions::H3,
                         ech_config: None,
                     },
                 }),
@@ -156,7 +156,7 @@ mod https_port_svcparam_overrides_port_for {
                         result: DnsResult::Https(Ok(vec![ServiceInfo {
                             priority: 1,
                             target_name: HOSTNAME.into(),
-                            alpn_protocols: HashSet::from([HttpVersion::H3, HttpVersion::H2]),
+                            alpn_http_versions: HashSet::from([HttpVersion::H3, HttpVersion::H2]),
                             ipv6_hints: vec![V6_ADDR],
                             ipv4_hints,
                             ech_config: None,
@@ -199,7 +199,7 @@ fn https_port_svcparam_applies_to_resolved_a_and_aaaa() {
                     result: DnsResult::Https(Ok(vec![ServiceInfo {
                         priority: 1,
                         target_name: HOSTNAME.into(),
-                        alpn_protocols: HashSet::from([HttpVersion::H3, HttpVersion::H2]),
+                        alpn_http_versions: HashSet::from([HttpVersion::H3, HttpVersion::H2]),
                         ipv6_hints: vec![],
                         ipv4_hints: vec![],
                         ech_config: None,
@@ -243,7 +243,7 @@ fn https_port_svcparam_applies_but_fallbacks_follow() {
                     result: DnsResult::Https(Ok(vec![ServiceInfo {
                         priority: 1,
                         target_name: HOSTNAME.into(),
-                        alpn_protocols: HashSet::from([HttpVersion::H3, HttpVersion::H2]),
+                        alpn_http_versions: HashSet::from([HttpVersion::H3, HttpVersion::H2]),
                         ipv6_hints: vec![],
                         ipv4_hints: vec![],
                         ech_config: None,
@@ -259,7 +259,7 @@ fn https_port_svcparam_applies_but_fallbacks_follow() {
                     id: Id::from(3),
                     endpoint: Endpoint {
                         address: SocketAddr::new(V6_ADDR.into(), CUSTOM_PORT),
-                        protocol: ConnectionAttemptHttpVersions::H3,
+                        http_version: ConnectionAttemptHttpVersions::H3,
                         ech_config: None,
                     },
                 }),
@@ -307,16 +307,17 @@ fn https_two_service_infos_with_different_ports() {
     const PORT_2: u16 = 20008;
     let (mut now, mut he) = setup(); // PORT = 443
 
-    let attempt = |id: u64, addr: IpAddr, port: u16, protocol: ConnectionAttemptHttpVersions| {
-        Output::AttemptConnection {
-            id: Id::from(id),
-            endpoint: Endpoint {
-                address: SocketAddr::new(addr, port),
-                protocol,
-                ech_config: None,
-            },
-        }
-    };
+    let attempt =
+        |id: u64, addr: IpAddr, port: u16, http_version: ConnectionAttemptHttpVersions| {
+            Output::AttemptConnection {
+                id: Id::from(id),
+                endpoint: Endpoint {
+                    address: SocketAddr::new(addr, port),
+                    http_version,
+                    ech_config: None,
+                },
+            }
+        };
 
     he.expect(
         vec![
@@ -331,7 +332,7 @@ fn https_two_service_infos_with_different_ports() {
                         ServiceInfo {
                             priority: 1,
                             target_name: HOSTNAME.into(),
-                            alpn_protocols: HashSet::from([HttpVersion::H3, HttpVersion::H2]),
+                            alpn_http_versions: HashSet::from([HttpVersion::H3, HttpVersion::H2]),
                             ipv6_hints: vec![],
                             ipv4_hints: vec![],
                             ech_config: None,
@@ -340,7 +341,7 @@ fn https_two_service_infos_with_different_ports() {
                         ServiceInfo {
                             priority: 2,
                             target_name: HOSTNAME.into(),
-                            alpn_protocols: HashSet::from([HttpVersion::H3, HttpVersion::H2]),
+                            alpn_http_versions: HashSet::from([HttpVersion::H3, HttpVersion::H2]),
                             ipv6_hints: vec![],
                             ipv4_hints: vec![],
                             ech_config: None,
@@ -456,7 +457,7 @@ fn https_svc1_addresses_trigger_additional_attempts() {
                         ServiceInfo {
                             priority: 1,
                             target_name: HOSTNAME.into(),
-                            alpn_protocols: HashSet::from([HttpVersion::H2, HttpVersion::H3]),
+                            alpn_http_versions: HashSet::from([HttpVersion::H2, HttpVersion::H3]),
                             ipv6_hints: vec![],
                             ipv4_hints: vec![],
                             ech_config: None,
@@ -465,7 +466,7 @@ fn https_svc1_addresses_trigger_additional_attempts() {
                         ServiceInfo {
                             priority: 2,
                             target_name: SVC1.into(),
-                            alpn_protocols: HashSet::from([HttpVersion::H2, HttpVersion::H3]),
+                            alpn_http_versions: HashSet::from([HttpVersion::H2, HttpVersion::H3]),
                             ipv6_hints: vec![],
                             ipv4_hints: vec![],
                             ech_config: None,
@@ -514,12 +515,12 @@ fn https_svc1_addresses_trigger_additional_attempts() {
         now,
     );
 
-    let attempt = |id: u64, addr: IpAddr, protocol: ConnectionAttemptHttpVersions| {
+    let attempt = |id: u64, addr: IpAddr, http_version: ConnectionAttemptHttpVersions| {
         Output::AttemptConnection {
             id: Id::from(id),
             endpoint: Endpoint {
                 address: SocketAddr::new(addr, PORT),
-                protocol,
+                http_version,
                 ech_config: None,
             },
         }
