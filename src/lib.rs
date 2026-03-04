@@ -516,6 +516,7 @@ pub enum ConnectionState {
     InProgress,
     Succeeded,
     Failed,
+    Cancelled,
 }
 
 #[derive(Debug, Clone)]
@@ -887,11 +888,20 @@ impl HappyEyeballs {
             return;
         };
 
-        debug_assert_eq!(
-            attempt.state,
-            ConnectionState::InProgress,
-            "got connection result but attempt is not in progress: {attempt:?}"
-        );
+        match attempt.state {
+            ConnectionState::InProgress => {}
+            ConnectionState::Cancelled => {
+                log::debug!("ignoring connection result for cancelled attempt {id:?}: {result:?}");
+                return;
+            }
+            ConnectionState::Succeeded | ConnectionState::Failed => {
+                debug_assert!(
+                    false,
+                    "got connection result but attempt is in unexpected state: {attempt:?}"
+                );
+                return;
+            }
+        }
 
         match result {
             Ok(()) => {
@@ -923,7 +933,7 @@ impl HappyEyeballs {
             .find(|a| a.state == ConnectionState::InProgress)
         {
             let id = attempt.id;
-            attempt.state = ConnectionState::Failed;
+            attempt.state = ConnectionState::Cancelled;
             return Some(Output::CancelConnection { id });
         }
 
