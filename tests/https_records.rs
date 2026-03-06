@@ -9,8 +9,8 @@ use std::{
 };
 
 use happy_eyeballs::{
-    ConnectionAttemptHttpVersions, DnsRecordType, DnsResult, Endpoint, HttpVersion, Id, Input,
-    Output, ServiceInfo,
+    AltSvc, ConnectionAttemptHttpVersions, DnsRecordType, DnsResult, Endpoint, HttpVersion,
+    HttpVersions, Id, Input, IpPreference, NetworkConfig, Output, ServiceInfo,
 };
 
 #[test]
@@ -539,6 +539,132 @@ fn https_svc1_addresses_trigger_additional_attempts() {
             attempt(10, V4_ADDR_2.into(), ConnectionAttemptHttpVersions::H3), // priority=2
             attempt(11, V6_ADDR_2.into(), ConnectionAttemptHttpVersions::H2), // priority=2
             attempt(12, V4_ADDR_2.into(), ConnectionAttemptHttpVersions::H2), // priority=2
+        ],
+    );
+}
+
+/// HTTPS record port takes precedence over alt-svc port.
+///
+/// HTTPS record with port=8443 and H3+H2; alt-svc with port=9443 and H3.
+/// Expected order:
+///   HTTPS bucket    (port 8443): V6:H3, V4:H3, V6:H2, V4:H2
+///   alt-svc bucket  (port 9443): V6:H3, V4:H3
+///   fallback bucket (port  443): V6:H3, V4:H3, V6:H2, V4:H2
+#[test]
+fn https_port_takes_precedence_over_alt_svc_port() {
+    const HTTPS_PORT: u16 = 8443;
+    const ALT_SVC_PORT: u16 = 9443;
+
+    let config = NetworkConfig {
+        http_versions: HttpVersions::default(),
+        ip: IpPreference::DualStackPreferV6,
+        alt_svc: vec![AltSvc {
+            host: None,
+            port: Some(ALT_SVC_PORT),
+            http_version: HttpVersion::H3,
+        }],
+    };
+    let (mut now, mut he) = setup_with_config(config);
+
+    he.expect(
+        vec![
+            (None, Some(out_send_dns_https(Id::from(0)))),
+            (None, Some(out_send_dns_aaaa(Id::from(1)))),
+            (None, Some(out_send_dns_a(Id::from(2)))),
+            // HTTPS record with port=8443
+            (
+                Some(Input::DnsResult {
+                    id: Id::from(0),
+                    result: DnsResult::Https(Ok(vec![ServiceInfo {
+                        priority: 1,
+                        target_name: HOSTNAME.into(),
+                        alpn_http_versions: HashSet::from([HttpVersion::H3, HttpVersion::H2]),
+                        ipv6_hints: vec![],
+                        ipv4_hints: vec![],
+                        ech_config: None,
+                        port: Some(HTTPS_PORT),
+                    }])),
+                }),
+                Some(out_resolution_delay()),
+            ),
+            // AAAA arrives; HTTPS bucket first (port 8443)
+            (
+                Some(in_dns_aaaa_positive(Id::from(1))),
+                Some(out_attempt(
+                    Id::from(3),
+                    V6_ADDR.into(),
+                    HTTPS_PORT,
+                    ConnectionAttemptHttpVersions::H3,
+                )),
+            ),
+            (
+                Some(in_dns_a_positive(Id::from(2))),
+                Some(out_connection_attempt_delay()),
+            ),
+        ],
+        now,
+    );
+
+    he.expect_connection_attempts(
+        &mut now,
+        vec![
+            // HTTPS bucket (port 8443)
+            out_attempt(
+                Id::from(4),
+                V4_ADDR.into(),
+                HTTPS_PORT,
+                ConnectionAttemptHttpVersions::H3,
+            ),
+            out_attempt(
+                Id::from(5),
+                V6_ADDR.into(),
+                HTTPS_PORT,
+                ConnectionAttemptHttpVersions::H2,
+            ),
+            out_attempt(
+                Id::from(6),
+                V4_ADDR.into(),
+                HTTPS_PORT,
+                ConnectionAttemptHttpVersions::H2,
+            ),
+            // Alt-svc bucket (port 9443)
+            out_attempt(
+                Id::from(7),
+                V6_ADDR.into(),
+                ALT_SVC_PORT,
+                ConnectionAttemptHttpVersions::H3,
+            ),
+            out_attempt(
+                Id::from(8),
+                V4_ADDR.into(),
+                ALT_SVC_PORT,
+                ConnectionAttemptHttpVersions::H3,
+            ),
+            // Fallback bucket (port 443)
+            out_attempt(
+                Id::from(9),
+                V6_ADDR.into(),
+                PORT,
+                ConnectionAttemptHttpVersions::H3,
+            ),
+            out_attempt(
+                Id::from(10),
+                V4_ADDR.into(),
+                PORT,
+                ConnectionAttemptHttpVersions::H3,
+            ),
+            out_attempt(
+                Id::from(11),
+                V6_ADDR.into(),
+                PORT,
+                ConnectionAttemptHttpVersions::H2,
+            ),
+            out_attempt(
+                Id::from(12),
+                V4_ADDR.into(),
+                PORT,
+                ConnectionAttemptHttpVersions::H2,
+            ),
         ],
     );
 }

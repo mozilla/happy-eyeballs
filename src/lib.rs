@@ -353,6 +353,16 @@ pub enum ConnectionAttemptHttpVersions {
     H1,
 }
 
+impl From<HttpVersion> for ConnectionAttemptHttpVersions {
+    fn from(v: HttpVersion) -> Self {
+        match v {
+            HttpVersion::H3 => ConnectionAttemptHttpVersions::H3,
+            HttpVersion::H2 => ConnectionAttemptHttpVersions::H2,
+            HttpVersion::H1 => ConnectionAttemptHttpVersions::H1,
+        }
+    }
+}
+
 impl ConnectionAttemptHttpVersions {
     /// [`HttpVersion::H2`] and [`HttpVersion::H1`] into [`ConnectionAttemptHttpVersions::H2OrH1`].
     fn from_alpn(http_versions: &HashSet<HttpVersion>) -> HashSet<ConnectionAttemptHttpVersions> {
@@ -1061,6 +1071,42 @@ impl HappyEyeballs {
             endpoints.extend(bucket);
         }
 
+        // Alt-svc endpoints with custom port.
+        //
+        // These use the origin domain's resolved addresses at the alt-svc port.
+        // HTTPS record endpoints above take precedence by virtue of ordering.
+        for alt_svc in &self.network_config.alt_svc {
+            if alt_svc.host.is_some() {
+                // Alt-svc host resolution not yet implemented.
+                continue;
+            }
+            let Some(alt_port) = alt_svc.port else {
+                continue;
+            };
+
+            let alt_http_version: ConnectionAttemptHttpVersions = alt_svc.http_version.into();
+            if !http_versions.contains(&alt_http_version) {
+                continue;
+            }
+            let alt_http_versions = HashSet::from([alt_http_version]);
+
+            let mut bucket: Vec<Endpoint> = self
+                .dns_queries
+                .iter()
+                .filter_map(|q| match q {
+                    DnsQuery::Completed {
+                        target_name,
+                        response: r @ (DnsResult::Aaaa(_) | DnsResult::A(_)),
+                        ..
+                    } if target_name.as_str() == origin_domain => Some(r),
+                    _ => None,
+                })
+                .flat_map(|r| r.flatten_into_endpoints(alt_port, &alt_http_versions))
+                .collect();
+            bucket.sort_by(|a, b| a.sort_with_config(b, &self.network_config));
+            endpoints.extend(bucket);
+        }
+
         // Fallback to AAAA and A of the original hostname only.
         let mut bucket: Vec<Endpoint> = self
             .dns_queries
@@ -1134,8 +1180,8 @@ impl HappyEyeballs {
         // Add HTTP versions from alt-svc
         for alt_svc in &self.network_config.alt_svc {
             debug_assert!(
-                alt_svc.host.is_none() && alt_svc.port.is_none(),
-                "alt-svc with custom host/port not yet supported"
+                alt_svc.host.is_none(),
+                "alt-svc with custom host not yet supported"
             );
             http_versions.insert(alt_svc.http_version);
         }

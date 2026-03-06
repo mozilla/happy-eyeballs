@@ -2,7 +2,7 @@
 
 use std::{
     collections::HashSet,
-    net::{Ipv4Addr, Ipv6Addr, SocketAddr},
+    net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr},
     time::Instant,
 };
 
@@ -297,6 +297,22 @@ pub fn out_attempt_v4_h2_custom_port(id: Id) -> Output {
         endpoint: Endpoint {
             address: SocketAddr::new(V4_ADDR.into(), CUSTOM_PORT),
             http_version: ConnectionAttemptHttpVersions::H2,
+            ech_config: None,
+        },
+    }
+}
+
+pub fn out_attempt(
+    id: Id,
+    addr: IpAddr,
+    port: u16,
+    http_version: ConnectionAttemptHttpVersions,
+) -> Output {
+    Output::AttemptConnection {
+        id,
+        endpoint: Endpoint {
+            address: SocketAddr::new(addr, port),
+            http_version,
             ech_config: None,
         },
     }
