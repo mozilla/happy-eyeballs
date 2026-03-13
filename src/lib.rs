@@ -825,17 +825,25 @@ impl HappyEyeballs {
     /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2.1>
     fn send_dns_request_for_target_name(&mut self) -> Option<Output> {
         // Check if we have HTTPS response with ServiceInfo
-        let target_names = self
+        let service_infos: Vec<&ServiceInfo> = self
             .dns_queries
             .iter()
             .filter_map(|q| match q {
                 DnsQuery::Completed {
                     response: DnsResult::Https(Ok(service_infos)),
                     ..
-                } => Some(service_infos.iter().map(|i| &i.target_name)),
+                } => Some(service_infos.iter()),
                 _ => None,
             })
-            .flatten();
+            .flatten()
+            .collect();
+
+        // When any ServiceInfo has ECH, skip resolving targets without ECH.
+        let any_ech = service_infos.iter().any(|i| i.ech_config.is_some());
+        let target_names = service_infos
+            .iter()
+            .filter(|i| !any_ech || i.ech_config.is_some())
+            .map(|i| &i.target_name);
 
         for target_name in target_names {
             for record_type in [DnsRecordType::Aaaa, DnsRecordType::A] {
@@ -1033,6 +1041,13 @@ impl HappyEyeballs {
             .collect();
         service_infos.sort_by_key(|i| i.priority);
 
+        // When at least one ServiceInfo has ECH config, skip those without it
+        // and skip the origin fallback.
+        let any_ech = service_infos.iter().any(|i| i.ech_config.is_some());
+        if any_ech {
+            service_infos.retain(|i| i.ech_config.is_some());
+        }
+
         // build a sorted endpoints per ServiceInfo.
         let http_versions = self.connection_attempt_http_versions();
         let mut endpoints: Vec<Endpoint> = Vec::new();
@@ -1069,6 +1084,17 @@ impl HappyEyeballs {
                 info.flatten_into_endpoints(self.port, &ipv4_addrs, &ipv6_addrs, &http_versions);
             bucket.sort_by(|a, b| a.sort_with_config(b, &self.network_config));
             endpoints.extend(bucket);
+        }
+
+        // Alt-svc and fallback endpoints use the origin domain without ECH,
+        // so skip them when ECH is required.
+        if any_ech {
+            return endpoints.into_iter().find(|endpoint| {
+                !self
+                    .connection_attempts
+                    .iter()
+                    .any(|attempt| attempt.endpoint == *endpoint)
+            });
         }
 
         // Alt-svc endpoints with custom port.
