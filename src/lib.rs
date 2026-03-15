@@ -824,8 +824,9 @@ impl HappyEyeballs {
     ///
     /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2.1>
     fn send_dns_request_for_target_name(&mut self) -> Option<Output> {
-        // Check if we have HTTPS response with ServiceInfo
-        let service_infos: Vec<&ServiceInfo> = self
+        let any_ech = self.any_ech();
+
+        let target_names = self
             .dns_queries
             .iter()
             .filter_map(|q| match q {
@@ -836,42 +837,32 @@ impl HappyEyeballs {
                 _ => None,
             })
             .flatten()
-            .collect();
-
-        // When any ServiceInfo has ECH, skip resolving targets without ECH.
-        let any_ech = self.any_ech();
-        let target_names = service_infos
-            .iter()
-            .filter(|i| !any_ech || i.ech_config.is_some())
+            // When any ServiceInfo has ECH, skip resolving targets without ECH.
+            .filter(move |i| !any_ech || i.ech_config.is_some())
             .map(|i| &i.target_name);
 
-        for target_name in target_names {
-            for record_type in [DnsRecordType::Aaaa, DnsRecordType::A] {
-                if self
+        // Next AAAA or A query.
+        let (target_name, record_type) = target_names
+            .flat_map(|tn| [(tn, DnsRecordType::Aaaa), (tn, DnsRecordType::A)])
+            .find(|(tn, rt)| {
+                !self
                     .dns_queries
                     .iter()
-                    .any(|q| q.target_name() == target_name && q.record_type() == record_type)
-                {
-                    continue;
-                }
+                    .any(|q| q.target_name() == *tn && q.record_type() == *rt)
+            })?;
 
-                let target_name = target_name.clone();
-                let id = self.id_generator.next_id();
-
-                self.dns_queries.push(DnsQuery::InProgress {
-                    id,
-                    target_name: target_name.clone(),
-                    record_type,
-                });
-                return Some(Output::SendDnsQuery {
-                    id,
-                    hostname: target_name,
-                    record_type,
-                });
-            }
-        }
-
-        None
+        let target_name = target_name.clone();
+        let id = self.id_generator.next_id();
+        self.dns_queries.push(DnsQuery::InProgress {
+            id,
+            target_name: target_name.clone(),
+            record_type,
+        });
+        Some(Output::SendDnsQuery {
+            id,
+            hostname: target_name,
+            record_type,
+        })
     }
 
     fn on_dns_response(&mut self, id: Id, response: DnsResult, now: Instant) {
