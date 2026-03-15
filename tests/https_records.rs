@@ -9,8 +9,9 @@ use std::{
 };
 
 use happy_eyeballs::{
-    AltSvc, ConnectionAttemptHttpVersions, DnsRecordType, DnsResult, Endpoint, HttpVersion,
-    HttpVersions, Id, Input, IpPreference, NetworkConfig, Output, ServiceInfo,
+    AltSvc, CONNECTION_ATTEMPT_DELAY, ConnectionAttemptHttpVersions, DnsRecordType, DnsResult,
+    Endpoint, HttpVersion, HttpVersions, Id, Input, IpPreference, NetworkConfig, Output,
+    ServiceInfo,
 };
 
 #[test]
@@ -233,19 +234,24 @@ fn partial_ech_two_service_infos() {
         now,
     );
 
-    // Only SVC1 (with ECH) produces attempts. SVC2 is never resolved.
-    // Fallback is skipped even though HOSTNAME has valid addresses.
-    he.expect_connection_attempts(
-        &mut now,
-        vec![Output::AttemptConnection {
-            id: Id::from(6),
-            endpoint: Endpoint {
-                address: SocketAddr::new(V4_ADDR_2.into(), SVC1_PORT),
-                http_version: ConnectionAttemptHttpVersions::H2,
-                ech_config: Some(ECH_CONFIG.to_vec()),
-            },
-        }],
+    now += CONNECTION_ATTEMPT_DELAY;
+    he.expect(
+        vec![(
+            None,
+            Some(Output::AttemptConnection {
+                id: Id::from(6),
+                endpoint: Endpoint {
+                    address: SocketAddr::new(V4_ADDR_2.into(), SVC1_PORT),
+                    http_version: ConnectionAttemptHttpVersions::H2,
+                    ech_config: Some(ECH_CONFIG.to_vec()),
+                },
+            }),
+        )],
+        now,
     );
+
+    now += CONNECTION_ATTEMPT_DELAY;
+    he.expect(vec![(None, None)], now);
 }
 
 /// Both ServiceInfo records have ECH. The origin fallback is still skipped
