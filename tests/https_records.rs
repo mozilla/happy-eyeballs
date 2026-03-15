@@ -532,17 +532,24 @@ fn partial_ech_with_alt_svc() {
     );
 
     // Only SVC1 (with ECH). Alt-svc, SVC2, and fallback all skipped.
-    he.expect_connection_attempts(
-        &mut now,
-        vec![Output::AttemptConnection {
-            id: Id::from(6),
-            endpoint: Endpoint {
-                address: SocketAddr::new(V4_ADDR_2.into(), SVC1_PORT),
-                http_version: ConnectionAttemptHttpVersions::H2,
-                ech_config: Some(ECH_CONFIG.to_vec()),
-            },
-        }],
+    now += CONNECTION_ATTEMPT_DELAY;
+    he.expect(
+        vec![(
+            None,
+            Some(Output::AttemptConnection {
+                id: Id::from(6),
+                endpoint: Endpoint {
+                    address: SocketAddr::new(V4_ADDR_2.into(), SVC1_PORT),
+                    http_version: ConnectionAttemptHttpVersions::H2,
+                    ech_config: Some(ECH_CONFIG.to_vec()),
+                },
+            }),
+        )],
+        now,
     );
+
+    now += CONNECTION_ATTEMPT_DELAY;
+    he.expect(vec![(None, None)], now);
 }
 
 mod https_port_svcparam_overrides_port_for {
