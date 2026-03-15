@@ -1017,6 +1017,8 @@ impl HappyEyeballs {
             Host::Domain(domain) => domain,
         };
 
+        let any_ech = self.any_ech();
+
         // Collect all ServiceInfos sorted by priority.
         let mut service_infos: Vec<&ServiceInfo> = self
             .dns_queries
@@ -1029,15 +1031,11 @@ impl HappyEyeballs {
                 _ => None,
             })
             .flatten()
+            // When at least one ServiceInfo has ECH config, skip those without it
+            // and skip the origin fallback.
+            .filter(|i| !any_ech || i.ech_config.is_some())
             .collect();
         service_infos.sort_by_key(|i| i.priority);
-
-        // When at least one ServiceInfo has ECH config, skip those without it
-        // and skip the origin fallback.
-        let any_ech = self.any_ech();
-        if any_ech {
-            service_infos.retain(|i| i.ech_config.is_some());
-        }
 
         // build a sorted endpoints per ServiceInfo.
         let http_versions = self.connection_attempt_http_versions();
@@ -1077,36 +1075,46 @@ impl HappyEyeballs {
             endpoints.extend(bucket);
         }
 
-        // Alt-svc and fallback endpoints use the origin domain without ECH,
-        // so skip them when ECH is required.
-        if any_ech {
-            return endpoints.into_iter().find(|endpoint| {
-                !self
-                    .connection_attempts
+        // Alt-svc and fallback endpoints use the origin domain without ECH.
+        // Only include them when ECH is not required.
+        if !any_ech {
+            // Alt-svc endpoints with custom port.
+            //
+            // These use the origin domain's resolved addresses at the alt-svc port.
+            // HTTPS record endpoints above take precedence by virtue of ordering.
+            for alt_svc in &self.network_config.alt_svc {
+                if alt_svc.host.is_some() {
+                    // Alt-svc host resolution not yet implemented.
+                    continue;
+                }
+                let Some(alt_port) = alt_svc.port else {
+                    continue;
+                };
+
+                let alt_http_version: ConnectionAttemptHttpVersions = alt_svc.http_version.into();
+                if !http_versions.contains(&alt_http_version) {
+                    continue;
+                }
+                let alt_http_versions = HashSet::from([alt_http_version]);
+
+                let mut bucket: Vec<Endpoint> = self
+                    .dns_queries
                     .iter()
-                    .any(|attempt| attempt.endpoint == *endpoint)
-            });
-        }
-
-        // Alt-svc endpoints with custom port.
-        //
-        // These use the origin domain's resolved addresses at the alt-svc port.
-        // HTTPS record endpoints above take precedence by virtue of ordering.
-        for alt_svc in &self.network_config.alt_svc {
-            if alt_svc.host.is_some() {
-                // Alt-svc host resolution not yet implemented.
-                continue;
+                    .filter_map(|q| match q {
+                        DnsQuery::Completed {
+                            target_name,
+                            response: r @ (DnsResult::Aaaa(_) | DnsResult::A(_)),
+                            ..
+                        } if target_name.as_str() == origin_domain => Some(r),
+                        _ => None,
+                    })
+                    .flat_map(|r| r.flatten_into_endpoints(alt_port, &alt_http_versions))
+                    .collect();
+                bucket.sort_by(|a, b| a.sort_with_config(b, &self.network_config));
+                endpoints.extend(bucket);
             }
-            let Some(alt_port) = alt_svc.port else {
-                continue;
-            };
 
-            let alt_http_version: ConnectionAttemptHttpVersions = alt_svc.http_version.into();
-            if !http_versions.contains(&alt_http_version) {
-                continue;
-            }
-            let alt_http_versions = HashSet::from([alt_http_version]);
-
+            // Fallback to AAAA and A of the original hostname only.
             let mut bucket: Vec<Endpoint> = self
                 .dns_queries
                 .iter()
@@ -1118,28 +1126,11 @@ impl HappyEyeballs {
                     } if target_name.as_str() == origin_domain => Some(r),
                     _ => None,
                 })
-                .flat_map(|r| r.flatten_into_endpoints(alt_port, &alt_http_versions))
+                .flat_map(|r| r.flatten_into_endpoints(self.port, &http_versions))
                 .collect();
             bucket.sort_by(|a, b| a.sort_with_config(b, &self.network_config));
             endpoints.extend(bucket);
         }
-
-        // Fallback to AAAA and A of the original hostname only.
-        let mut bucket: Vec<Endpoint> = self
-            .dns_queries
-            .iter()
-            .filter_map(|q| match q {
-                DnsQuery::Completed {
-                    target_name,
-                    response: r @ (DnsResult::Aaaa(_) | DnsResult::A(_)),
-                    ..
-                } if target_name.as_str() == origin_domain => Some(r),
-                _ => None,
-            })
-            .flat_map(|r| r.flatten_into_endpoints(self.port, &http_versions))
-            .collect();
-        bucket.sort_by(|a, b| a.sort_with_config(b, &self.network_config));
-        endpoints.extend(bucket);
 
         endpoints.into_iter().find(|endpoint| {
             !self
