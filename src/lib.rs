@@ -792,8 +792,18 @@ impl HappyEyeballs {
         }
         .into();
 
-        // TODO: What if v4 or v6 is disabled? Don't send the query.
         for record_type in [DnsRecordType::Https, DnsRecordType::Aaaa, DnsRecordType::A] {
+            // Skip address family queries that don't match the network configuration.
+            if record_type == DnsRecordType::Aaaa
+                && matches!(self.network_config.ip, IpPreference::Ipv4Only)
+            {
+                continue;
+            }
+            if record_type == DnsRecordType::A
+                && matches!(self.network_config.ip, IpPreference::Ipv6Only)
+            {
+                continue;
+            }
             if !self
                 .dns_queries
                 .iter()
