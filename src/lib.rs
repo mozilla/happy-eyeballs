@@ -839,7 +839,7 @@ impl HappyEyeballs {
             .collect();
 
         // When any ServiceInfo has ECH, skip resolving targets without ECH.
-        let any_ech = service_infos.iter().any(|i| i.ech_config.is_some());
+        let any_ech = self.any_ech();
         let target_names = service_infos
             .iter()
             .filter(|i| !any_ech || i.ech_config.is_some())
@@ -1043,7 +1043,7 @@ impl HappyEyeballs {
 
         // When at least one ServiceInfo has ECH config, skip those without it
         // and skip the origin fallback.
-        let any_ech = service_infos.iter().any(|i| i.ech_config.is_some());
+        let any_ech = self.any_ech();
         if any_ech {
             service_infos.retain(|i| i.ech_config.is_some());
         }
@@ -1174,6 +1174,16 @@ impl HappyEyeballs {
         self.connection_attempts
             .iter()
             .any(|a| a.state == ConnectionState::InProgress)
+    }
+
+    fn any_ech(&self) -> bool {
+        self.dns_queries.iter().any(|q| match q {
+            DnsQuery::Completed {
+                response: DnsResult::Https(Ok(infos)),
+                ..
+            } => infos.iter().any(|i| i.ech_config.is_some()),
+            _ => false,
+        })
     }
 
     fn connection_attempt_http_versions(&self) -> HashSet<ConnectionAttemptHttpVersions> {
