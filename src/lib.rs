@@ -495,6 +495,17 @@ pub struct NetworkConfig {
     pub ip: IpPreference,
     /// Alternative services from previous connections
     pub alt_svc: Vec<AltSvc>,
+    /// The time to wait after receiving the first DNS response before moving on
+    /// to the connection phase, giving the remaining queries a chance to arrive.
+    ///
+    /// Defaults to [`RESOLUTION_DELAY`] (50 ms) per
+    /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>.
+    pub resolution_delay: Duration,
+    /// The time to wait between successive connection attempts.
+    ///
+    /// Defaults to [`CONNECTION_ATTEMPT_DELAY`] (250 ms) per
+    /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-9>.
+    pub connection_attempt_delay: Duration,
 }
 
 impl Default for NetworkConfig {
@@ -503,6 +514,8 @@ impl Default for NetworkConfig {
             http_versions: HttpVersions::default(),
             ip: IpPreference::DualStackPreferV6,
             alt_svc: Vec::new(),
+            resolution_delay: RESOLUTION_DELAY,
+            connection_attempt_delay: CONNECTION_ATTEMPT_DELAY,
         }
     }
 }
@@ -540,8 +553,8 @@ pub struct ConnectionAttempt {
 }
 
 impl ConnectionAttempt {
-    fn within_delay(&self, now: Instant) -> bool {
-        now.duration_since(self.started) < CONNECTION_ATTEMPT_DELAY
+    fn within_delay(&self, now: Instant, connection_attempt_delay: Duration) -> bool {
+        now.duration_since(self.started) < connection_attempt_delay
     }
 }
 
@@ -739,8 +752,8 @@ impl HappyEyeballs {
             .max()
             .and_then(|started| {
                 let elapsed = now.duration_since(*started);
-                if elapsed < CONNECTION_ATTEMPT_DELAY {
-                    Some(CONNECTION_ATTEMPT_DELAY - elapsed)
+                if elapsed < self.network_config.connection_attempt_delay {
+                    Some(self.network_config.connection_attempt_delay - elapsed)
                 } else {
                     None
                 }
@@ -773,8 +786,8 @@ impl HappyEyeballs {
             .min()
             .and_then(|completed| {
                 let elapsed = now.duration_since(*completed);
-                if elapsed < RESOLUTION_DELAY {
-                    Some(RESOLUTION_DELAY - elapsed)
+                if elapsed < self.network_config.resolution_delay {
+                    Some(self.network_config.resolution_delay - elapsed)
                 } else {
                     None
                 }
@@ -987,7 +1000,7 @@ impl HappyEyeballs {
             .connection_attempts
             .iter()
             .filter(|a| a.state == ConnectionState::InProgress)
-            .any(|a| a.within_delay(now))
+            .any(|a| a.within_delay(now, self.network_config.connection_attempt_delay))
         {
             return None;
         }
@@ -1307,6 +1320,6 @@ impl HappyEyeballs {
                 DnsQuery::InProgress { .. } => None,
                 DnsQuery::Completed { completed, .. } => Some(completed),
             })
-            .any(|completed| now.duration_since(*completed) >= RESOLUTION_DELAY)
+            .any(|completed| now.duration_since(*completed) >= self.network_config.resolution_delay)
     }
 }

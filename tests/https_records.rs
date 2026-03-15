@@ -10,8 +10,7 @@ use std::{
 
 use happy_eyeballs::{
     AltSvc, CONNECTION_ATTEMPT_DELAY, ConnectionAttemptHttpVersions, DnsRecordType, DnsResult,
-    Endpoint, HttpVersion, HttpVersions, Id, Input, IpPreference, NetworkConfig, Output,
-    ServiceInfo,
+    Endpoint, HttpVersion, Id, Input, NetworkConfig, Output, ServiceInfo,
 };
 
 #[test]
@@ -443,13 +442,12 @@ fn partial_ech_with_alt_svc() {
     const ALT_SVC_PORT: u16 = 8443;
 
     let config = NetworkConfig {
-        http_versions: HttpVersions::default(),
-        ip: IpPreference::DualStackPreferV6,
         alt_svc: vec![AltSvc {
             host: None,
             port: Some(ALT_SVC_PORT),
             http_version: HttpVersion::H3,
         }],
+        ..NetworkConfig::default()
     };
     let (mut now, mut he) = setup_with_config(config);
 
@@ -979,13 +977,12 @@ fn https_port_takes_precedence_over_alt_svc_port() {
     const ALT_SVC_PORT: u16 = 9443;
 
     let config = NetworkConfig {
-        http_versions: HttpVersions::default(),
-        ip: IpPreference::DualStackPreferV6,
         alt_svc: vec![AltSvc {
             host: None,
             port: Some(ALT_SVC_PORT),
             http_version: HttpVersion::H3,
         }],
+        ..NetworkConfig::default()
     };
     let (mut now, mut he) = setup_with_config(config);
 

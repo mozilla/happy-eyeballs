@@ -95,7 +95,7 @@ fn move_on_non_timeout() {
             address_family: NetworkConfig {
                 http_versions: HttpVersions::default(),
                 ip: IpPreference::DualStackPreferV6,
-                alt_svc: Vec::new(),
+                ..NetworkConfig::default()
             },
             positive: in_dns_aaaa_positive(Id::from(1)),
             preferred: None,
@@ -106,7 +106,7 @@ fn move_on_non_timeout() {
             address_family: NetworkConfig {
                 http_versions: HttpVersions::default(),
                 ip: IpPreference::DualStackPreferV6,
-                alt_svc: Vec::new(),
+                ..NetworkConfig::default()
             },
             positive: in_dns_a_positive(Id::from(2)),
             preferred: Some(in_dns_aaaa_positive(Id::from(1))),
@@ -117,7 +117,7 @@ fn move_on_non_timeout() {
             address_family: NetworkConfig {
                 http_versions: HttpVersions::default(),
                 ip: IpPreference::DualStackPreferV6,
-                alt_svc: Vec::new(),
+                ..NetworkConfig::default()
             },
             positive: in_dns_a_positive(Id::from(2)),
             preferred: Some(in_dns_aaaa_negative(Id::from(1))),
@@ -128,7 +128,7 @@ fn move_on_non_timeout() {
             address_family: NetworkConfig {
                 http_versions: HttpVersions::default(),
                 ip: IpPreference::DualStackPreferV4,
-                alt_svc: Vec::new(),
+                ..NetworkConfig::default()
             },
             positive: in_dns_a_positive(Id::from(2)),
             preferred: None,
@@ -139,7 +139,7 @@ fn move_on_non_timeout() {
             address_family: NetworkConfig {
                 http_versions: HttpVersions::default(),
                 ip: IpPreference::DualStackPreferV4,
-                alt_svc: Vec::new(),
+                ..NetworkConfig::default()
             },
             positive: in_dns_aaaa_positive(Id::from(1)),
             preferred: Some(in_dns_a_positive(Id::from(2))),
@@ -150,7 +150,7 @@ fn move_on_non_timeout() {
             address_family: NetworkConfig {
                 http_versions: HttpVersions::default(),
                 ip: IpPreference::DualStackPreferV4,
-                alt_svc: Vec::new(),
+                ..NetworkConfig::default()
             },
             positive: in_dns_aaaa_positive(Id::from(1)),
             preferred: Some(in_dns_a_negative(Id::from(2))),
@@ -470,9 +470,8 @@ fn single_stack_skips_disabled_address_family() {
 
     for case in cases {
         let (now, mut he) = setup_with_config(NetworkConfig {
-            http_versions: HttpVersions::default(),
             ip: case.ip,
-            alt_svc: Vec::new(),
+            ..NetworkConfig::default()
         });
 
         he.expect(
