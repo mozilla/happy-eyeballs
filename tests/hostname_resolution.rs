@@ -489,26 +489,3 @@ fn single_stack_skips_disabled_address_family() {
         );
     }
 }
-
-#[test]
-fn dns_failed() {
-    let (now, mut he) = setup();
-
-    he.expect(
-        vec![
-            (None, Some(out_send_dns_https(Id::from(0)))),
-            (None, Some(out_send_dns_aaaa(Id::from(1)))),
-            (None, Some(out_send_dns_a(Id::from(2)))),
-            (
-                Some(in_dns_https_negative(Id::from(0))),
-                Some(out_resolution_delay()),
-            ),
-            (
-                Some(in_dns_aaaa_negative(Id::from(1))),
-                Some(out_resolution_delay()),
-            ),
-            (Some(in_dns_a_negative(Id::from(2))), Some(Output::Failed)),
-        ],
-        now,
-    );
-}

@@ -195,8 +195,18 @@ pub enum Output {
     /// Connection attempt succeeded
     Succeeded,
 
-    /// All connection attempts have failed and there are no more to try
-    Failed,
+    /// Failed to establish a connection, either due to DNS resolution failure
+    /// or because all connection attempts have failed.
+    Failed(FailureReason),
+}
+
+/// Reason for a connection failure.
+#[derive(Debug, Clone, PartialEq)]
+pub enum FailureReason {
+    /// All DNS resolutions failed.
+    DnsResolution,
+    /// All connection attempts failed.
+    Connection,
 }
 
 impl Output {
@@ -702,11 +712,8 @@ impl HappyEyeballs {
             return Some(o);
         }
 
-        if !self.has_successful_connection()
-            && !self.has_pending_queries()
-            && !self.has_pending_connections()
-        {
-            return Some(Output::Failed);
+        if let Some(reason) = self.failed() {
+            return Some(Output::Failed(reason));
         }
 
         // TODO: Instead of returning None, how about happy-eyeballs also owns
@@ -1131,14 +1138,28 @@ impl HappyEyeballs {
             .any(|a| a.state == ConnectionState::Succeeded)
     }
 
-    fn has_pending_queries(&self) -> bool {
-        self.dns_queries.iter().any(|q| !q.is_completed())
-    }
+    fn failed(&self) -> Option<FailureReason> {
+        if self.has_successful_connection()
+            || self.dns_queries.iter().any(|q| !q.is_completed())
+            || self
+                .connection_attempts
+                .iter()
+                .any(|a| a.state == ConnectionState::InProgress)
+        {
+            return None;
+        }
 
-    fn has_pending_connections(&self) -> bool {
-        self.connection_attempts
-            .iter()
-            .any(|a| a.state == ConnectionState::InProgress)
+        Some(
+            if self
+                .connection_attempts
+                .iter()
+                .any(|a| a.state == ConnectionState::Failed)
+            {
+                FailureReason::Connection
+            } else {
+                FailureReason::DnsResolution
+            },
+        )
     }
 
     fn any_ech(&self) -> bool {

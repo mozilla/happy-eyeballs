@@ -10,7 +10,7 @@ use std::{
 
 use happy_eyeballs::{
     AltSvc, CONNECTION_ATTEMPT_DELAY, ConnectionAttemptHttpVersions, DnsRecordType, DnsResult,
-    Endpoint, HttpVersion, Id, Input, NetworkConfig, Output, ServiceInfo,
+    Endpoint, FailureReason, HttpVersion, Id, Input, NetworkConfig, Output, ServiceInfo,
 };
 
 #[test]
@@ -855,7 +855,7 @@ fn no_default_alpn() {
             ),
             (
                 Some(in_connection_result_negative(Id::from(6))),
-                Some(Output::Failed),
+                Some(Output::Failed(FailureReason::Connection)),
             ),
         ],
         now,
