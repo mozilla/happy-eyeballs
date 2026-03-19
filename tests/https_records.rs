@@ -693,18 +693,16 @@ fn https_port_svcparam_applies_but_fallbacks_follow() {
         now,
     );
 
-    // Connection attempts using custom port: V6:H3, V4:H3, V6:H2, V4:H2, then
-    // fallback on port 443.
+    // Connection attempts using custom port: V4:H3, V6:H2, V4:H2, then
+    // fallback on port 443 with default HTTP versions (H2OrH1).
     he.expect_connection_attempts(
         &mut now,
         vec![
             out_attempt_v4_h3_custom_port(Id::from(4)),
             out_attempt_v6_h2_custom_port(Id::from(5)),
             out_attempt_v4_h2_custom_port(Id::from(6)),
-            out_attempt_v6_h3(Id::from(7)),
-            out_attempt_v4_h3(Id::from(8)),
-            out_attempt_v6_h2(Id::from(9)),
-            out_attempt_v4_h2(Id::from(10)),
+            out_attempt_v6_h1_h2(Id::from(7)),
+            out_attempt_v4_h1_h2(Id::from(8)),
         ],
     );
 }
@@ -808,11 +806,9 @@ fn https_two_service_infos_with_different_ports() {
                 PORT_2,
                 ConnectionAttemptHttpVersions::H2,
             ),
-            // Fallback bucket (port 443).
-            out_attempt_v6_h3(Id::from(11)),
-            out_attempt_v4_h3(Id::from(12)),
-            out_attempt_v6_h2(Id::from(13)),
-            out_attempt_v4_h2(Id::from(14)),
+            // Fallback bucket (port 443) uses default HTTP versions.
+            out_attempt_v6_h1_h2(Id::from(11)),
+            out_attempt_v4_h1_h2(Id::from(12)),
         ],
     );
 }
@@ -853,8 +849,17 @@ fn no_default_alpn() {
                 Some(in_connection_result_negative(Id::from(5))),
                 Some(out_attempt_v4_h2(Id::from(6))),
             ),
+            // Fallback bucket with default HTTP versions (H2OrH1).
             (
                 Some(in_connection_result_negative(Id::from(6))),
+                Some(out_attempt_v6_h1_h2(Id::from(7))),
+            ),
+            (
+                Some(in_connection_result_negative(Id::from(7))),
+                Some(out_attempt_v4_h1_h2(Id::from(8))),
+            ),
+            (
+                Some(in_connection_result_negative(Id::from(8))),
                 Some(Output::Failed(FailureReason::Connection)),
             ),
         ],
@@ -949,7 +954,7 @@ fn https_svc1_addresses_trigger_additional_attempts() {
 
     // Addresses respect HTTPS record priority: P1 (HOSTNAME, priority=1) endpoints
     // come before P2 (SVC1, priority=2) endpoints.  V6_ADDR:H3 was already
-    // attempted (id=5); the remaining 7 follow in priority order.
+    // attempted (id=5); the remaining follow in priority order, then fallback.
     he.expect_connection_attempts(
         &mut now,
         vec![
@@ -960,6 +965,9 @@ fn https_svc1_addresses_trigger_additional_attempts() {
             attempt(10, V4_ADDR_2.into(), ConnectionAttemptHttpVersions::H3), // priority=2
             attempt(11, V6_ADDR_2.into(), ConnectionAttemptHttpVersions::H2), // priority=2
             attempt(12, V4_ADDR_2.into(), ConnectionAttemptHttpVersions::H2), // priority=2
+            // Fallback bucket with default HTTP versions (H2OrH1).
+            attempt(13, V6_ADDR.into(), ConnectionAttemptHttpVersions::H2OrH1),
+            attempt(14, V4_ADDR.into(), ConnectionAttemptHttpVersions::H2OrH1),
         ],
     );
 }
@@ -970,7 +978,7 @@ fn https_svc1_addresses_trigger_additional_attempts() {
 /// Expected order:
 ///   HTTPS bucket    (port 8443): V6:H3, V4:H3, V6:H2, V4:H2
 ///   alt-svc bucket  (port 9443): V6:H3, V4:H3
-///   fallback bucket (port  443): V6:H3, V4:H3, V6:H2, V4:H2
+///   fallback bucket (port  443): V6:H3, V4:H3, V6:H2OrH1, V4:H2OrH1
 #[test]
 fn https_port_takes_precedence_over_alt_svc_port() {
     const HTTPS_PORT: u16 = 8443;
@@ -1060,7 +1068,7 @@ fn https_port_takes_precedence_over_alt_svc_port() {
                 ALT_SVC_PORT,
                 ConnectionAttemptHttpVersions::H3,
             ),
-            // Fallback bucket (port 443)
+            // Fallback bucket (port 443) uses default versions plus alt-svc H3.
             out_attempt(
                 Id::from(9),
                 V6_ADDR.into(),
@@ -1077,14 +1085,70 @@ fn https_port_takes_precedence_over_alt_svc_port() {
                 Id::from(11),
                 V6_ADDR.into(),
                 PORT,
-                ConnectionAttemptHttpVersions::H2,
+                ConnectionAttemptHttpVersions::H2OrH1,
             ),
             out_attempt(
                 Id::from(12),
                 V4_ADDR.into(),
                 PORT,
-                ConnectionAttemptHttpVersions::H2,
+                ConnectionAttemptHttpVersions::H2OrH1,
             ),
         ],
     );
+}
+
+/// HTTPS record with `alpn="h3"` and `port=8443`. The HTTPS bucket should use
+/// H3 at port 8443, but the fallback bucket (origin domain, authority port)
+/// must use the default HTTP versions (H2OrH1), not H3 which came from the
+/// HTTPS record.
+///
+/// ```dns
+/// example.com  HTTPS  1 . alpn="h3" port=8443
+/// example.com  A      192.0.2.1
+/// ```
+///
+/// Expected connection attempts:
+///   HTTPS bucket (port 8443): V4:H3
+///   fallback bucket (port 443): V4:H2OrH1
+#[test]
+fn https_fallback_uses_default_http_versions() {
+    let (mut now, mut he) = setup();
+
+    he.expect(
+        vec![
+            (None, Some(out_send_dns_https(Id::from(0)))),
+            (None, Some(out_send_dns_aaaa(Id::from(1)))),
+            (None, Some(out_send_dns_a(Id::from(2)))),
+            // HTTPS record with port=8443, alpn=h3 only
+            (
+                Some(Input::DnsResult {
+                    id: Id::from(0),
+                    result: DnsResult::Https(Ok(vec![ServiceInfo {
+                        priority: 1,
+                        target_name: HOSTNAME.into(),
+                        alpn_http_versions: HashSet::from([HttpVersion::H3]),
+                        ipv6_hints: vec![],
+                        ipv4_hints: vec![],
+                        ech_config: None,
+                        port: Some(CUSTOM_PORT),
+                    }])),
+                }),
+                Some(out_resolution_delay()),
+            ),
+            (
+                Some(in_dns_aaaa_negative(Id::from(1))),
+                Some(out_resolution_delay()),
+            ),
+            // Positive A: connection attempt uses port 8443 with H3 from HTTPS record
+            (
+                Some(in_dns_a_positive(Id::from(2))),
+                Some(out_attempt_v4_h3_custom_port(Id::from(3))),
+            ),
+            (None, Some(out_connection_attempt_delay())),
+        ],
+        now,
+    );
+
+    // Fallback on port 443 must use default H2OrH1, NOT H3.
+    he.expect_connection_attempts(&mut now, vec![out_attempt_v4_h1_h2(Id::from(4))]);
 }

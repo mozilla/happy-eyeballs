@@ -294,7 +294,7 @@ impl ServiceInfo {
         };
 
         let hint_http_versions: HashSet<ConnectionAttemptHttpVersions> =
-            ConnectionAttemptHttpVersions::from_alpn(&self.alpn_http_versions)
+            ConnectionAttemptHttpVersions::from_http_versions(&self.alpn_http_versions)
                 .intersection(http_versions)
                 .cloned()
                 .collect();
@@ -367,7 +367,9 @@ impl From<HttpVersion> for ConnectionAttemptHttpVersions {
 
 impl ConnectionAttemptHttpVersions {
     /// [`HttpVersion::H2`] and [`HttpVersion::H1`] into [`ConnectionAttemptHttpVersions::H2OrH1`].
-    fn from_alpn(http_versions: &HashSet<HttpVersion>) -> HashSet<ConnectionAttemptHttpVersions> {
+    fn from_http_versions(
+        http_versions: &HashSet<HttpVersion>,
+    ) -> HashSet<ConnectionAttemptHttpVersions> {
         let mut combinations = HashSet::new();
         if http_versions.contains(&HttpVersion::H3) {
             combinations.insert(ConnectionAttemptHttpVersions::H3);
@@ -995,7 +997,7 @@ impl HappyEyeballs {
     fn next_endpoint_to_attempt(&self) -> Option<Endpoint> {
         let origin_domain = match &self.host {
             Host::Ipv4(ipv4_addr) => {
-                let http_versions = self.connection_attempt_http_versions();
+                let http_versions = self.ip_host_http_versions();
                 return Some(Endpoint {
                     address: SocketAddr::new(IpAddr::V4(*ipv4_addr), self.port),
                     http_version: *http_versions.iter().next()?,
@@ -1003,7 +1005,7 @@ impl HappyEyeballs {
                 });
             }
             Host::Ipv6(ipv6_addr) => {
-                let http_versions = self.connection_attempt_http_versions();
+                let http_versions = self.ip_host_http_versions();
                 return Some(Endpoint {
                     address: SocketAddr::new(IpAddr::V6(*ipv6_addr), self.port),
                     http_version: *http_versions.iter().next()?,
@@ -1034,7 +1036,7 @@ impl HappyEyeballs {
         service_infos.sort_by_key(|i| i.priority);
 
         // build a sorted endpoints per ServiceInfo.
-        let http_versions = self.connection_attempt_http_versions();
+        let http_versions = self.https_record_http_versions();
         let mut endpoints: Vec<Endpoint> = Vec::new();
         for info in &service_infos {
             let ipv4_addrs: Vec<Ipv4Addr> = self
@@ -1108,6 +1110,11 @@ impl HappyEyeballs {
             }
 
             // Fallback to AAAA and A of the original hostname only.
+            //
+            // The fallback uses default HTTP versions (H2/H1), not those
+            // derived from HTTPS records, since HTTPS record parameters
+            // (like H3 or custom ports) do not apply to the origin fallback.
+            let fallback_http_versions = self.fallback_http_versions();
             let mut bucket: Vec<Endpoint> = self
                 .dns_queries
                 .iter()
@@ -1118,7 +1125,7 @@ impl HappyEyeballs {
                     } if q.target_name.as_str() == origin_domain => Some(r),
                     _ => None,
                 })
-                .flat_map(|r| r.flatten_into_endpoints(self.port, &http_versions))
+                .flat_map(|r| r.flatten_into_endpoints(self.port, &fallback_http_versions))
                 .collect();
             bucket.sort_by(|a, b| a.cmp_with_config(b, &self.network_config));
             endpoints.extend(bucket);
@@ -1172,10 +1179,23 @@ impl HappyEyeballs {
         })
     }
 
-    fn connection_attempt_http_versions(&self) -> HashSet<ConnectionAttemptHttpVersions> {
+    /// HTTP versions when the host is an IP address (no DNS involved).
+    ///
+    /// Default H2/H1 plus alt-svc, filtered by network config.
+    fn ip_host_http_versions(&self) -> HashSet<ConnectionAttemptHttpVersions> {
+        let mut http_versions = HashSet::from([HttpVersion::H2, HttpVersion::H1]);
+        self.add_alt_svc_http_versions(&mut http_versions);
+        self.filter_disabled_http_versions(&mut http_versions);
+        ConnectionAttemptHttpVersions::from_http_versions(&http_versions)
+    }
+
+    /// HTTP versions for HTTPS record (ServiceInfo) endpoints.
+    ///
+    /// Uses ALPNs from HTTPS records plus alt-svc. Falls back to H2/H1 when
+    /// HTTPS records specify no versions. Filtered by network config.
+    fn https_record_http_versions(&self) -> HashSet<ConnectionAttemptHttpVersions> {
         let mut http_versions = HashSet::new();
 
-        // Add HTTP versions from DNS HTTPS records
         http_versions.extend(
             self.dns_queries
                 .iter()
@@ -1193,13 +1213,25 @@ impl HappyEyeballs {
                 .flatten(),
         );
 
-        // If HTTPS DNS records didn't specify any HTTP versions, default to HTTP/2, and HTTP/1.1.
         if http_versions.is_empty() {
             http_versions.insert(HttpVersion::H2);
             http_versions.insert(HttpVersion::H1);
         }
 
-        // Add HTTP versions from alt-svc
+        self.add_alt_svc_http_versions(&mut http_versions);
+        self.filter_disabled_http_versions(&mut http_versions);
+        ConnectionAttemptHttpVersions::from_http_versions(&http_versions)
+    }
+
+    /// HTTP versions for the origin fallback bucket.
+    ///
+    /// Default H2/H1 plus alt-svc, filtered by network config.
+    /// HTTPS-record ALPNs are excluded: those apply only to the HTTPS bucket.
+    fn fallback_http_versions(&self) -> HashSet<ConnectionAttemptHttpVersions> {
+        self.ip_host_http_versions()
+    }
+
+    fn add_alt_svc_http_versions(&self, http_versions: &mut HashSet<HttpVersion>) {
         for alt_svc in &self.network_config.alt_svc {
             debug_assert!(
                 alt_svc.host.is_none(),
@@ -1207,7 +1239,9 @@ impl HappyEyeballs {
             );
             http_versions.insert(alt_svc.http_version);
         }
+    }
 
+    fn filter_disabled_http_versions(&self, http_versions: &mut HashSet<HttpVersion>) {
         if !self.network_config.http_versions.h3 {
             http_versions.remove(&HttpVersion::H3);
         }
@@ -1217,8 +1251,6 @@ impl HappyEyeballs {
         if !self.network_config.http_versions.h1 {
             http_versions.remove(&HttpVersion::H1);
         }
-
-        ConnectionAttemptHttpVersions::from_alpn(&http_versions)
     }
 
     /// Whether to move on to the connection attempt phase based on the received
