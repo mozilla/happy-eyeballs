@@ -56,7 +56,7 @@ use std::time::{Duration, Instant};
 
 use log::trace;
 use thiserror::Error;
-use url::Host;
+use url::Host as UrlHost;
 
 mod id;
 pub use id::Id;
@@ -574,6 +574,31 @@ impl Endpoint {
     }
 }
 
+#[derive(Debug, Clone)]
+enum Host {
+    Ip(IpAddr),
+    Domain(String),
+}
+
+impl From<UrlHost> for Host {
+    fn from(host: UrlHost) -> Self {
+        match host {
+            UrlHost::Ipv4(v4) => Host::Ip(IpAddr::V4(v4)),
+            UrlHost::Ipv6(v6) => Host::Ip(IpAddr::V6(v6)),
+            UrlHost::Domain(d) => Host::Domain(d),
+        }
+    }
+}
+
+impl std::fmt::Display for Host {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Host::Ip(ip) => write!(f, "{ip}"),
+            Host::Domain(d) => write!(f, "{d}"),
+        }
+    }
+}
+
 /// Happy Eyeballs v3 state machine
 pub struct HappyEyeballs {
     id_generator: IdGenerator,
@@ -638,11 +663,10 @@ impl HappyEyeballs {
     ) -> Result<Self, ConstructorError> {
         // Prefer URL-style host parsing (domains and bracketed IPv6).
         // If that fails, accept raw IP literals (IPv4/IPv6) without brackets.
-        let host = match Host::parse(host) {
-            Ok(h) => h,
+        let host = match UrlHost::parse(host) {
+            Ok(h) => Host::from(h),
             Err(e) => match host.parse::<IpAddr>() {
-                Ok(IpAddr::V4(v4)) => Host::Ipv4(v4),
-                Ok(IpAddr::V6(v6)) => Host::Ipv6(v6),
+                Ok(ip) => Host::Ip(ip),
                 Err(_) => return Err(ConstructorErrorInner::InvalidHost(e).into()),
             },
         };
@@ -777,7 +801,7 @@ impl HappyEyeballs {
 
     fn send_dns_request(&mut self) -> Option<Output> {
         let target_name: TargetName = match &self.host {
-            Host::Ipv4(_) | Host::Ipv6(_) => {
+            Host::Ip(_) => {
                 // No DNS queries needed for IP hosts.
                 return None;
             }
@@ -968,7 +992,7 @@ impl HappyEyeballs {
         let mut move_on = false;
         move_on |= self.move_on_without_timeout();
         move_on |= self.move_on_with_timeout(now);
-        move_on |= matches!(self.host, Host::Ipv4(_) | Host::Ipv6(_));
+        move_on |= matches!(self.host, Host::Ip(_));
         if !move_on {
             return None;
         }
@@ -981,7 +1005,12 @@ impl HappyEyeballs {
         {
             return None;
         }
-        let endpoint = self.next_endpoint_to_attempt()?;
+        let endpoint = self.endpoints_to_attempt().into_iter().find(|endpoint| {
+            !self
+                .connection_attempts
+                .iter()
+                .any(|attempt| attempt.endpoint == *endpoint)
+        })?;
         let id = self.id_generator.next_id();
 
         self.connection_attempts.push(ConnectionAttempt {
@@ -994,27 +1023,28 @@ impl HappyEyeballs {
         Some(Output::AttemptConnection { id, endpoint })
     }
 
-    fn next_endpoint_to_attempt(&self) -> Option<Endpoint> {
-        let origin_domain = match &self.host {
-            Host::Ipv4(ipv4_addr) => {
-                let http_versions = self.ip_host_http_versions();
-                return Some(Endpoint {
-                    address: SocketAddr::new(IpAddr::V4(*ipv4_addr), self.port),
-                    http_version: *http_versions.iter().next()?,
-                    ech_config: None,
-                });
-            }
-            Host::Ipv6(ipv6_addr) => {
-                let http_versions = self.ip_host_http_versions();
-                return Some(Endpoint {
-                    address: SocketAddr::new(IpAddr::V6(*ipv6_addr), self.port),
-                    http_version: *http_versions.iter().next()?,
-                    ech_config: None,
-                });
-            }
-            Host::Domain(domain) => domain,
-        };
+    fn endpoints_to_attempt(&self) -> Vec<Endpoint> {
+        match &self.host {
+            Host::Ip(ip) => self.endpoints_to_attempt_ip(*ip),
+            Host::Domain(domain) => self.endpoints_to_attempt_domain(domain),
+        }
+    }
 
+    fn endpoints_to_attempt_ip(&self, ip: IpAddr) -> Vec<Endpoint> {
+        let mut endpoints: Vec<Endpoint> = self
+            .ip_host_http_versions()
+            .into_iter()
+            .map(|http_version| Endpoint {
+                address: SocketAddr::new(ip, self.port),
+                http_version,
+                ech_config: None,
+            })
+            .collect();
+        endpoints.sort_by(|a, b| a.cmp_with_config(b, &self.network_config));
+        endpoints
+    }
+
+    fn endpoints_to_attempt_domain(&self, origin_domain: &str) -> Vec<Endpoint> {
         let any_ech = self.any_ech();
 
         // Collect all ServiceInfos sorted by priority.
@@ -1131,12 +1161,7 @@ impl HappyEyeballs {
             endpoints.extend(bucket);
         }
 
-        endpoints.into_iter().find(|endpoint| {
-            !self
-                .connection_attempts
-                .iter()
-                .any(|attempt| attempt.endpoint == *endpoint)
-        })
+        endpoints
     }
 
     fn has_successful_connection(&self) -> bool {
@@ -1256,9 +1281,9 @@ impl HappyEyeballs {
     /// Whether to move on to the connection attempt phase based on the received
     /// DNS responses, not based on a timeout.
     fn move_on_without_timeout(&self) -> bool {
-        let hostname = match self.host {
-            Host::Domain(ref d) => d.as_str(),
-            Host::Ipv4(_) | Host::Ipv6(_) => {
+        let hostname = match &self.host {
+            Host::Domain(d) => d.as_str(),
+            Host::Ip(_) => {
                 return false;
             }
         };
