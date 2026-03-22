@@ -978,7 +978,7 @@ fn https_svc1_addresses_trigger_additional_attempts() {
 /// Expected order:
 ///   HTTPS bucket    (port 8443): V6:H3, V4:H3, V6:H2, V4:H2
 ///   alt-svc bucket  (port 9443): V6:H3, V4:H3
-///   fallback bucket (port  443): V6:H3, V4:H3, V6:H2OrH1, V4:H2OrH1
+///   fallback bucket (port  443): V6:H2OrH1, V4:H2OrH1
 #[test]
 fn https_port_takes_precedence_over_alt_svc_port() {
     const HTTPS_PORT: u16 = 8443;
@@ -1068,27 +1068,15 @@ fn https_port_takes_precedence_over_alt_svc_port() {
                 ALT_SVC_PORT,
                 ConnectionAttemptHttpVersions::H3,
             ),
-            // Fallback bucket (port 443) uses default versions plus alt-svc H3.
+            // Fallback bucket (port 443) uses default versions only.
             out_attempt(
                 Id::from(9),
-                V6_ADDR.into(),
-                PORT,
-                ConnectionAttemptHttpVersions::H3,
-            ),
-            out_attempt(
-                Id::from(10),
-                V4_ADDR.into(),
-                PORT,
-                ConnectionAttemptHttpVersions::H3,
-            ),
-            out_attempt(
-                Id::from(11),
                 V6_ADDR.into(),
                 PORT,
                 ConnectionAttemptHttpVersions::H2OrH1,
             ),
             out_attempt(
-                Id::from(12),
+                Id::from(10),
                 V4_ADDR.into(),
                 PORT,
                 ConnectionAttemptHttpVersions::H2OrH1,

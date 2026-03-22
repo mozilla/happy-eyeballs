@@ -523,6 +523,14 @@ impl NetworkConfig {
             IpPreference::DualStackPreferV4 | IpPreference::Ipv4Only => DnsRecordType::A,
         }
     }
+
+    fn is_http_version_disabled(&self, http_version: HttpVersion) -> bool {
+        match http_version {
+            HttpVersion::H3 => !self.http_versions.h3,
+            HttpVersion::H2 => !self.http_versions.h2,
+            HttpVersion::H1 => !self.http_versions.h1,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1031,16 +1039,16 @@ impl HappyEyeballs {
     }
 
     fn endpoints_to_attempt_ip(&self, ip: IpAddr) -> Vec<Endpoint> {
-        let mut endpoints: Vec<Endpoint> = self
-            .ip_host_http_versions()
-            .into_iter()
-            .map(|http_version| Endpoint {
-                address: SocketAddr::new(ip, self.port),
+        let mut endpoints: Vec<Endpoint> = Vec::new();
+        for (http_version, port) in self.origin_version_port_pairs() {
+            let mut bucket = vec![Endpoint {
+                address: SocketAddr::new(ip, port),
                 http_version,
                 ech_config: None,
-            })
-            .collect();
-        endpoints.sort_by(|a, b| a.cmp_with_config(b, &self.network_config));
+            }];
+            bucket.sort_by(|a, b| a.cmp_with_config(b, &self.network_config));
+            endpoints.extend(bucket);
+        }
         endpoints
     }
 
@@ -1104,25 +1112,8 @@ impl HappyEyeballs {
         // Alt-svc and fallback endpoints use the origin domain without ECH.
         // Only include them when ECH is not required.
         if !any_ech {
-            // Alt-svc endpoints with custom port.
-            //
-            // These use the origin domain's resolved addresses at the alt-svc port.
-            // HTTPS record endpoints above take precedence by virtue of ordering.
-            for alt_svc in &self.network_config.alt_svc {
-                if alt_svc.host.is_some() {
-                    // Alt-svc host resolution not yet implemented.
-                    continue;
-                }
-                let Some(alt_port) = alt_svc.port else {
-                    continue;
-                };
-
-                let alt_http_version: ConnectionAttemptHttpVersions = alt_svc.http_version.into();
-                if !http_versions.contains(&alt_http_version) {
-                    continue;
-                }
-                let alt_http_versions = HashSet::from([alt_http_version]);
-
+            for (http_version, port) in self.origin_version_port_pairs() {
+                let http_versions = HashSet::from([http_version]);
                 let mut bucket: Vec<Endpoint> = self
                     .dns_queries
                     .iter()
@@ -1133,32 +1124,11 @@ impl HappyEyeballs {
                         } if q.target_name.as_str() == origin_domain => Some(r),
                         _ => None,
                     })
-                    .flat_map(|r| r.flatten_into_endpoints(alt_port, &alt_http_versions))
+                    .flat_map(|r| r.flatten_into_endpoints(port, &http_versions))
                     .collect();
                 bucket.sort_by(|a, b| a.cmp_with_config(b, &self.network_config));
                 endpoints.extend(bucket);
             }
-
-            // Fallback to AAAA and A of the original hostname only.
-            //
-            // The fallback uses default HTTP versions (H2/H1), not those
-            // derived from HTTPS records, since HTTPS record parameters
-            // (like H3 or custom ports) do not apply to the origin fallback.
-            let fallback_http_versions = self.fallback_http_versions();
-            let mut bucket: Vec<Endpoint> = self
-                .dns_queries
-                .iter()
-                .filter_map(|q| match &q.state {
-                    DnsQueryState::Completed {
-                        response: r @ (DnsResult::Aaaa(_) | DnsResult::A(_)),
-                        ..
-                    } if q.target_name.as_str() == origin_domain => Some(r),
-                    _ => None,
-                })
-                .flat_map(|r| r.flatten_into_endpoints(self.port, &fallback_http_versions))
-                .collect();
-            bucket.sort_by(|a, b| a.cmp_with_config(b, &self.network_config));
-            endpoints.extend(bucket);
         }
 
         endpoints
@@ -1206,17 +1176,16 @@ impl HappyEyeballs {
 
     /// HTTP versions when the host is an IP address (no DNS involved).
     ///
-    /// Default H2/H1 plus alt-svc, filtered by network config.
+    /// Default H2/H1, filtered by network config.
     fn ip_host_http_versions(&self) -> HashSet<ConnectionAttemptHttpVersions> {
         let mut http_versions = HashSet::from([HttpVersion::H2, HttpVersion::H1]);
-        self.add_alt_svc_http_versions(&mut http_versions);
         self.filter_disabled_http_versions(&mut http_versions);
         ConnectionAttemptHttpVersions::from_http_versions(&http_versions)
     }
 
     /// HTTP versions for HTTPS record (ServiceInfo) endpoints.
     ///
-    /// Uses ALPNs from HTTPS records plus alt-svc. Falls back to H2/H1 when
+    /// Uses ALPNs from HTTPS records. Falls back to H2/H1 when
     /// HTTPS records specify no versions. Filtered by network config.
     fn https_record_http_versions(&self) -> HashSet<ConnectionAttemptHttpVersions> {
         let mut http_versions = HashSet::new();
@@ -1243,27 +1212,46 @@ impl HappyEyeballs {
             http_versions.insert(HttpVersion::H1);
         }
 
-        self.add_alt_svc_http_versions(&mut http_versions);
         self.filter_disabled_http_versions(&mut http_versions);
         ConnectionAttemptHttpVersions::from_http_versions(&http_versions)
     }
 
     /// HTTP versions for the origin fallback bucket.
     ///
-    /// Default H2/H1 plus alt-svc, filtered by network config.
+    /// Default H2/H1, filtered by network config.
     /// HTTPS-record ALPNs are excluded: those apply only to the HTTPS bucket.
     fn fallback_http_versions(&self) -> HashSet<ConnectionAttemptHttpVersions> {
         self.ip_host_http_versions()
     }
 
-    fn add_alt_svc_http_versions(&self, http_versions: &mut HashSet<HttpVersion>) {
+    /// (http_version, port) pairs for origin endpoints (alt-svc and defaults).
+    ///
+    /// Combines:
+    /// 1. Alt-svc entries (custom port or origin port)
+    /// 2. Default HTTP versions (H2/H1) at the origin port
+    fn origin_version_port_pairs(&self) -> Vec<(ConnectionAttemptHttpVersions, u16)> {
+        let mut pairs = Vec::new();
+
         for alt_svc in &self.network_config.alt_svc {
             debug_assert!(
                 alt_svc.host.is_none(),
                 "alt-svc with custom host not yet supported"
             );
-            http_versions.insert(alt_svc.http_version);
+            if self
+                .network_config
+                .is_http_version_disabled(alt_svc.http_version)
+            {
+                continue;
+            }
+            let port = alt_svc.port.unwrap_or(self.port);
+            pairs.push((alt_svc.http_version.into(), port));
         }
+
+        for http_version in self.fallback_http_versions() {
+            pairs.push((http_version, self.port));
+        }
+
+        pairs
     }
 
     fn filter_disabled_http_versions(&self, http_versions: &mut HashSet<HttpVersion>) {
