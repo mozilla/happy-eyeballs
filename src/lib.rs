@@ -441,6 +441,26 @@ pub enum IpPreference {
     Ipv4Only,
 }
 
+impl IpPreference {
+    fn address_record_types(&self) -> impl Iterator<Item = DnsRecordType> {
+        let aaaa = matches!(
+            self,
+            IpPreference::DualStackPreferV6
+                | IpPreference::DualStackPreferV4
+                | IpPreference::Ipv6Only
+        )
+        .then_some(DnsRecordType::Aaaa);
+        let a = matches!(
+            self,
+            IpPreference::DualStackPreferV6
+                | IpPreference::DualStackPreferV4
+                | IpPreference::Ipv4Only
+        )
+        .then_some(DnsRecordType::A);
+        aaaa.into_iter().chain(a)
+    }
+}
+
 /// Alternative service information from previous connections.
 ///
 /// See [RFC 7838](https://datatracker.ietf.org/doc/html/rfc7838).
@@ -808,18 +828,9 @@ impl HappyEyeballs {
         }
         .into();
 
-        for record_type in [DnsRecordType::Https, DnsRecordType::Aaaa, DnsRecordType::A] {
-            // Skip address family queries that don't match the network configuration.
-            if record_type == DnsRecordType::Aaaa
-                && matches!(self.network_config.ip, IpPreference::Ipv4Only)
-            {
-                continue;
-            }
-            if record_type == DnsRecordType::A
-                && matches!(self.network_config.ip, IpPreference::Ipv6Only)
-            {
-                continue;
-            }
+        let record_types = std::iter::once(DnsRecordType::Https)
+            .chain(self.network_config.ip.address_record_types());
+        for record_type in record_types {
             if !self
                 .dns_queries
                 .iter()
@@ -866,9 +877,14 @@ impl HappyEyeballs {
             .filter(move |i| !any_ech || i.ech_config.is_some())
             .map(|i| &i.target_name);
 
-        // Next AAAA or A query.
+        // Next AAAA or A query, respecting single-stack preferences.
         let (target_name, record_type) = target_names
-            .flat_map(|tn| [(tn, DnsRecordType::Aaaa), (tn, DnsRecordType::A)])
+            .flat_map(|tn| {
+                self.network_config
+                    .ip
+                    .address_record_types()
+                    .map(move |rt| (tn, rt))
+            })
             .find(|(tn, rt)| {
                 !self
                     .dns_queries
