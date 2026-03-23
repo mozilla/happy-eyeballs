@@ -57,6 +57,78 @@ fn ech_config_propagated_to_endpoint() {
     );
 }
 
+/// When ECH is disabled in the network config, ECH configs from HTTPS records
+/// are ignored: endpoints get `ech_config: None` and the origin fallback is
+/// not skipped.
+///
+/// HTTPS record has ECH + H3 ALPN with v6 hints. AAAA positive for origin.
+/// With ECH disabled:
+///   - HTTPS bucket uses hints: V6:H3 (no ECH)
+///   - Origin fallback is NOT skipped: V6:H2OrH1
+///
+/// <https://github.com/mozilla/happy-eyeballs/issues/20>
+#[test]
+fn ech_disabled() {
+    let (mut now, mut he) = setup_with_config(NetworkConfig {
+        ech: false,
+        ..NetworkConfig::default()
+    });
+
+    he.expect(
+        vec![
+            (None, Some(out_send_dns_https(Id::from(0)))),
+            (None, Some(out_send_dns_aaaa(Id::from(1)))),
+            (None, Some(out_send_dns_a(Id::from(2)))),
+            (
+                Some(in_dns_a_negative(Id::from(2))),
+                Some(out_resolution_delay()),
+            ),
+            (
+                Some(in_dns_aaaa_positive(Id::from(1))),
+                Some(out_resolution_delay()),
+            ),
+            (
+                Some(Input::DnsResult {
+                    id: Id::from(0),
+                    result: DnsResult::Https(Ok(vec![ServiceInfo {
+                        priority: 1,
+                        target_name: HOSTNAME.into(),
+                        // Only H3 in ALPN — fallback bucket uses H2OrH1 by default.
+                        alpn_http_versions: HashSet::from([HttpVersion::H3]),
+                        ipv6_hints: vec![V6_ADDR],
+                        ipv4_hints: vec![],
+                        ech_config: Some(ECH_CONFIG.to_vec()),
+                        port: None,
+                    }])),
+                }),
+                // HTTPS bucket: V6:H3, but ECH stripped.
+                Some(Output::AttemptConnection {
+                    id: Id::from(3),
+                    endpoint: Endpoint {
+                        address: SocketAddr::new(V6_ADDR.into(), PORT),
+                        http_version: ConnectionAttemptHttpVersions::H3,
+                        ech_config: None,
+                    },
+                }),
+            ),
+        ],
+        now,
+    );
+
+    // Origin fallback is NOT skipped despite HTTPS record having ECH.
+    he.expect_connection_attempts(
+        &mut now,
+        vec![Output::AttemptConnection {
+            id: Id::from(4),
+            endpoint: Endpoint {
+                address: SocketAddr::new(V6_ADDR.into(), PORT),
+                http_version: ConnectionAttemptHttpVersions::H2OrH1,
+                ech_config: None,
+            },
+        }],
+    );
+}
+
 #[test]
 fn ech_config_from_https_applies_to_aaaa() {
     let (now, mut he) = setup();

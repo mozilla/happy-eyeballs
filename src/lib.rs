@@ -263,6 +263,7 @@ impl ServiceInfo {
         ipv4_addrs: &[Ipv4Addr],
         ipv6_addrs: &[Ipv6Addr],
         http_versions: &HashSet<ConnectionAttemptHttpVersions>,
+        ech_enabled: bool,
     ) -> Vec<Endpoint> {
         let port = self.port.unwrap_or(port);
 
@@ -297,7 +298,7 @@ impl ServiceInfo {
             .chain(hint_v4.iter().cloned().map(IpAddr::V4))
             .flat_map(|ip| {
                 // TODO: way around allocation?
-                let ech_config = self.ech_config.clone();
+                let ech_config = ech_enabled.then(|| self.ech_config.clone()).flatten();
                 hint_http_versions
                     .iter()
                     .map(move |&http_version| Endpoint {
@@ -314,7 +315,7 @@ impl ServiceInfo {
             .chain(ipv4_addrs.iter().cloned().map(IpAddr::V4))
             .flat_map(|ip| {
                 // TODO: way around allocation?
-                let ech_config = self.ech_config.clone();
+                let ech_config = ech_enabled.then(|| self.ech_config.clone()).flatten();
                 http_versions.iter().map(move |v| Endpoint {
                     address: SocketAddr::new(ip, port),
                     http_version: *v,
@@ -506,6 +507,14 @@ pub struct NetworkConfig {
     /// Defaults to [`CONNECTION_ATTEMPT_DELAY`] (250 ms) per
     /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-9>.
     pub connection_attempt_delay: Duration,
+    /// Whether Encrypted Client Hello (ECH) is enabled.
+    ///
+    /// When `false`, ECH configs from HTTPS records are ignored: endpoints
+    /// always get `ech_config: None` and the ECH-based filtering (skip
+    /// non-ECH ServiceInfos, skip origin fallback) does not apply.
+    ///
+    /// Defaults to `true`.
+    pub ech: bool,
 }
 
 impl Default for NetworkConfig {
@@ -516,6 +525,7 @@ impl Default for NetworkConfig {
             alt_svc: Vec::new(),
             resolution_delay: RESOLUTION_DELAY,
             connection_attempt_delay: CONNECTION_ATTEMPT_DELAY,
+            ech: true,
         }
     }
 }
@@ -1110,8 +1120,13 @@ impl HappyEyeballs {
                 .flatten()
                 .cloned()
                 .collect();
-            let mut bucket =
-                info.flatten_into_endpoints(self.port, &ipv4_addrs, &ipv6_addrs, &http_versions);
+            let mut bucket = info.flatten_into_endpoints(
+                self.port,
+                &ipv4_addrs,
+                &ipv6_addrs,
+                &http_versions,
+                self.network_config.ech,
+            );
             bucket.sort_by(|a, b| a.cmp_with_config(b, &self.network_config));
             endpoints.extend(bucket);
         }
@@ -1172,6 +1187,9 @@ impl HappyEyeballs {
     }
 
     fn any_ech(&self) -> bool {
+        if !self.network_config.ech {
+            return false;
+        }
         self.dns_queries.iter().any(|q| match &q.state {
             DnsQueryState::Completed {
                 response: DnsResult::Https(Ok(infos)),
