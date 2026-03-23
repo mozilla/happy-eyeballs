@@ -91,24 +91,15 @@ pub enum DnsResult {
 }
 
 impl DnsResult {
-    fn record_type(&self) -> DnsRecordType {
+    /// Returns true if this result provides address information, i.e.
+    /// non-empty AAAA/A records or HTTPS records with IP hints.
+    fn has_addrs(&self) -> bool {
         match self {
-            DnsResult::Https(_) => DnsRecordType::Https,
-            DnsResult::Aaaa(_) => DnsRecordType::Aaaa,
-            DnsResult::A(_) => DnsRecordType::A,
-        }
-    }
-
-    /// Returns true if this result contains at least one non-empty record.
-    ///
-    /// > Some positive (non-empty) address answers have been received
-    ///
-    /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
-    fn positive(&self) -> bool {
-        match self {
-            DnsResult::Https(Ok(v)) => !v.is_empty(),
             DnsResult::Aaaa(Ok(v)) => !v.is_empty(),
             DnsResult::A(Ok(v)) => !v.is_empty(),
+            DnsResult::Https(Ok(infos)) => infos
+                .iter()
+                .any(|i| !i.ipv4_hints.is_empty() || !i.ipv6_hints.is_empty()),
             _ => false,
         }
     }
@@ -1280,14 +1271,7 @@ impl HappyEyeballs {
         //
         // <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
         if !self.dns_queries.iter().any(|q| match &q.state {
-            DnsQueryState::Completed { response, .. } => match response {
-                DnsResult::Aaaa(Ok(addrs)) => !addrs.is_empty(),
-                DnsResult::A(Ok(addrs)) => !addrs.is_empty(),
-                DnsResult::Https(Ok(infos)) => infos
-                    .iter()
-                    .any(|i| !i.ipv4_hints.is_empty() || !i.ipv6_hints.is_empty()),
-                _ => false,
-            },
+            DnsQueryState::Completed { response, .. } => response.has_addrs(),
             DnsQueryState::InProgress => false,
         }) {
             return false;
@@ -1331,13 +1315,12 @@ impl HappyEyeballs {
         //
         // <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
 
-        let mut positive_responses = self
+        if !self
             .dns_queries
             .iter()
             .filter_map(|q| q.response())
-            .filter(|r| r.positive())
-            .filter(|r| matches!(r.record_type(), DnsRecordType::Aaaa | DnsRecordType::A));
-        if positive_responses.next().is_none() {
+            .any(|r| r.has_addrs())
+        {
             return false;
         }
 

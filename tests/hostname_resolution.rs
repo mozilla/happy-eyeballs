@@ -321,6 +321,35 @@ fn https_hints() {
     );
 }
 
+/// HTTPS IP hints should count as positive address answers for the
+/// resolution delay timeout path (`move_on_with_timeout`).
+///
+/// Scenario: only HTTPS with v6 hints has arrived, AAAA and A are still
+/// in-progress. After the resolution delay we should move on.
+///
+/// <https://github.com/mozilla/happy-eyeballs/issues/39>
+#[test]
+fn https_hints_move_on_with_timeout() {
+    let (mut now, mut he) = setup();
+
+    he.expect(
+        vec![
+            (None, Some(out_send_dns_https(Id::from(0)))),
+            (None, Some(out_send_dns_aaaa(Id::from(1)))),
+            (None, Some(out_send_dns_a(Id::from(2)))),
+            (
+                Some(in_dns_https_positive_v6_hints(Id::from(0))),
+                Some(out_resolution_delay()),
+            ),
+        ],
+        now,
+    );
+
+    now += RESOLUTION_DELAY;
+
+    he.expect(vec![(None, Some(out_attempt_v6_h3(Id::from(3))))], now);
+}
+
 /// > Note that clients are still required to issue A and AAAA queries
 /// > for those TargetNames if they haven't yet received those records.
 ///
