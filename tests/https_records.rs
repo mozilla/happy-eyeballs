@@ -1157,6 +1157,120 @@ fn https_port_takes_precedence_over_alt_svc_port() {
     );
 }
 
+/// HTTPS record redirects to a different target name (no IP hints). Addresses
+/// resolved for that target name are used in connection attempts, with higher
+/// priority than the origin fallback.
+///
+/// ```dns
+/// example.com          HTTPS  1  svc1.example.com.  alpn="h3"
+/// svc1.example.com.    AAAA   2001:db8::2
+/// svc1.example.com.    A      192.0.2.2
+/// example.com          AAAA   2001:db8::1
+/// example.com          A      192.0.2.1
+/// ```
+///
+/// Expected connection attempts:
+///   SVC1 bucket (priority 1): V6_ADDR_2:H3, V4_ADDR_2:H3
+///   fallback bucket (origin): V6:H2OrH1,    V4:H2OrH1
+///
+/// <https://github.com/mozilla/happy-eyeballs/issues/10>
+#[test]
+fn target_name_redirect_addresses_used_in_connection_attempts() {
+    let (mut now, mut he) = setup();
+
+    he.expect(
+        vec![
+            (None, Some(out_send_dns_https(Id::from(0)))),
+            (None, Some(out_send_dns_aaaa(Id::from(1)))),
+            (None, Some(out_send_dns_a(Id::from(2)))),
+            // HTTPS response redirects to SVC1 (different target name, no hints)
+            (
+                Some(Input::DnsResult {
+                    id: Id::from(0),
+                    result: DnsResult::Https(Ok(vec![ServiceInfo {
+                        priority: 1,
+                        target_name: SVC1.into(),
+                        alpn_http_versions: HashSet::from([HttpVersion::H3]),
+                        ipv6_hints: vec![],
+                        ipv4_hints: vec![],
+                        ech_config: None,
+                        port: None,
+                    }])),
+                }),
+                // Follow-up DNS for the redirected target name
+                Some(Output::SendDnsQuery {
+                    id: Id::from(3),
+                    hostname: SVC1.into(),
+                    record_type: DnsRecordType::Aaaa,
+                }),
+            ),
+            (
+                None,
+                Some(Output::SendDnsQuery {
+                    id: Id::from(4),
+                    hostname: SVC1.into(),
+                    record_type: DnsRecordType::A,
+                }),
+            ),
+            (None, Some(out_resolution_delay())),
+            // SVC1 AAAA positive → move-on criteria met, first attempt uses
+            // the redirected target name's resolved address.
+            (
+                Some(Input::DnsResult {
+                    id: Id::from(3),
+                    result: DnsResult::Aaaa(Ok(vec![V6_ADDR_2])),
+                }),
+                Some(Output::AttemptConnection {
+                    id: Id::from(5),
+                    endpoint: Endpoint {
+                        address: SocketAddr::new(V6_ADDR_2.into(), PORT),
+                        http_version: ConnectionAttemptHttpVersions::H3,
+                        ech_config: None,
+                    },
+                }),
+            ),
+            (None, Some(out_connection_attempt_delay())),
+            // Remaining DNS arrives while first attempt is in progress
+            (
+                Some(Input::DnsResult {
+                    id: Id::from(4),
+                    result: DnsResult::A(Ok(vec![V4_ADDR_2])),
+                }),
+                Some(out_connection_attempt_delay()),
+            ),
+            (
+                Some(in_dns_aaaa_positive(Id::from(1))),
+                Some(out_connection_attempt_delay()),
+            ),
+            (
+                Some(in_dns_a_positive(Id::from(2))),
+                Some(out_connection_attempt_delay()),
+            ),
+        ],
+        now,
+    );
+
+    // Remaining attempts: SVC1's V4 address, then origin fallback.
+    // SVC1 (priority 1) addresses come before the origin fallback.
+    he.expect_connection_attempts(
+        &mut now,
+        vec![
+            // SVC1 bucket (priority 1)
+            Output::AttemptConnection {
+                id: Id::from(6),
+                endpoint: Endpoint {
+                    address: SocketAddr::new(V4_ADDR_2.into(), PORT),
+                    http_version: ConnectionAttemptHttpVersions::H3,
+                    ech_config: None,
+                },
+            },
+            // fallback bucket (origin)
+            out_attempt_v6_h1_h2(Id::from(7)),
+            out_attempt_v4_h1_h2(Id::from(8)),
+        ],
+    );
+}
+
 /// HTTPS record with `alpn="h3"` and `port=8443`. The HTTPS bucket should use
 /// H3 at port 8443, but the fallback bucket (origin domain, authority port)
 /// must use the default HTTP versions (H2OrH1), not H3 which came from the
