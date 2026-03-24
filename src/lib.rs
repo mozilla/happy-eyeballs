@@ -934,12 +934,6 @@ impl HappyEyeballs {
         };
     }
 
-    /// > When one connection attempt succeeds (generally when the TCP handshake
-    /// > completes), all other connections attempts that have not yet succeeded
-    /// > SHOULD be canceled. Any address that was not yet attempted as a
-    /// > connection SHOULD be ignored.
-    ///
-    /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-6>
     fn on_connection_result(&mut self, id: Id, result: Result<(), String>) {
         let Some(attempt) = self.connection_attempts.iter_mut().find(|a| a.id == id) else {
             debug_assert!(false, "got connection result for unknown id {id:?}");
