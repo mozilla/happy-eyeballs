@@ -4,7 +4,8 @@ use common::*;
 use std::time::{Duration, Instant};
 
 use happy_eyeballs::{
-    AltSvc, ConnectionAttemptHttpVersions, HappyEyeballs, HttpVersion, Id, NetworkConfig, Output,
+    AltSvc, ConnectionAttemptHttpVersions, FailureReason, HappyEyeballs, HttpVersion, Id,
+    NetworkConfig, Output,
 };
 
 #[test]
@@ -143,6 +144,21 @@ fn alt_svc_with_port() {
                 ConnectionAttemptHttpVersions::H2OrH1,
             ),
         ],
+    );
+
+    // All connection attempts fail -> should report Failed(Connection)
+    for id in 3..=5 {
+        he.expect(
+            vec![(Some(in_connection_result_negative(Id::from(id))), None)],
+            now,
+        );
+    }
+    he.expect(
+        vec![(
+            Some(in_connection_result_negative(Id::from(6))),
+            Some(Output::Failed(FailureReason::Connection)),
+        )],
+        now,
     );
 }
 
