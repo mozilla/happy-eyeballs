@@ -1021,6 +1021,11 @@ impl HappyEyeballs {
             ConnectionResult::EchRetry(ech_config) => {
                 attempt.state = ConnectionState::Failed;
 
+                if !self.network_config.ech {
+                    debug_assert!(false, "got EchRetry on attempt {id:?} but ECH is disabled");
+                    return;
+                }
+
                 // > Clients SHOULD NOT accept "retry_config" in response
                 // > to a connection initiated in response to a
                 // > "retry_config".
