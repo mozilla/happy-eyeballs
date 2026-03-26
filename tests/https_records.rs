@@ -9,8 +9,9 @@ use std::{
 };
 
 use happy_eyeballs::{
-    AltSvc, CONNECTION_ATTEMPT_DELAY, ConnectionAttemptHttpVersions, DnsRecordType, DnsResult,
-    Endpoint, FailureReason, HttpVersion, Id, Input, NetworkConfig, Output, ServiceInfo,
+    AltSvc, CONNECTION_ATTEMPT_DELAY, ConnectionAttemptHttpVersions, ConnectionResult,
+    DnsRecordType, DnsResult, EchConfig, Endpoint, FailureReason, HttpVersion, Id, Input,
+    NetworkConfig, Output, ServiceInfo,
 };
 
 #[test]
@@ -39,7 +40,7 @@ fn ech_config_propagated_to_endpoint() {
                         alpn_http_versions: HashSet::from([HttpVersion::H3, HttpVersion::H2]),
                         ipv6_hints: vec![V6_ADDR],
                         ipv4_hints: vec![],
-                        ech_config: Some(ECH_CONFIG.to_vec()),
+                        ech_config: Some(ech_config()),
                         port: None,
                     }])),
                 }),
@@ -48,7 +49,7 @@ fn ech_config_propagated_to_endpoint() {
                     endpoint: Endpoint {
                         address: SocketAddr::new(V6_ADDR.into(), PORT),
                         http_version: ConnectionAttemptHttpVersions::H3,
-                        ech_config: Some(ECH_CONFIG.to_vec()),
+                        ech_config: Some(ech_config()),
                     },
                 }),
             ),
@@ -97,7 +98,7 @@ fn ech_disabled() {
                         alpn_http_versions: HashSet::from([HttpVersion::H3]),
                         ipv6_hints: vec![V6_ADDR],
                         ipv4_hints: vec![],
-                        ech_config: Some(ECH_CONFIG.to_vec()),
+                        ech_config: Some(ech_config()),
                         port: None,
                     }])),
                 }),
@@ -147,7 +148,7 @@ fn ech_config_from_https_applies_to_aaaa() {
                         alpn_http_versions: HashSet::from([HttpVersion::H3, HttpVersion::H2]),
                         ipv6_hints: vec![],
                         ipv4_hints: vec![],
-                        ech_config: Some(ECH_CONFIG.to_vec()),
+                        ech_config: Some(ech_config()),
                         port: None,
                     }])),
                 }),
@@ -160,7 +161,7 @@ fn ech_config_from_https_applies_to_aaaa() {
                     endpoint: Endpoint {
                         address: SocketAddr::new(V6_ADDR.into(), PORT),
                         http_version: ConnectionAttemptHttpVersions::H3,
-                        ech_config: Some(ECH_CONFIG.to_vec()),
+                        ech_config: Some(ech_config()),
                     },
                 }),
             ),
@@ -241,7 +242,7 @@ fn partial_ech_two_service_infos() {
                             alpn_http_versions: HashSet::from([HttpVersion::H3]),
                             ipv6_hints: vec![],
                             ipv4_hints: vec![],
-                            ech_config: Some(ECH_CONFIG.to_vec()),
+                            ech_config: Some(ech_config()),
                             port: Some(SVC1_PORT),
                         },
                         ServiceInfo {
@@ -297,7 +298,7 @@ fn partial_ech_two_service_infos() {
                     endpoint: Endpoint {
                         address: SocketAddr::new(V4_ADDR_2.into(), SVC1_PORT),
                         http_version: ConnectionAttemptHttpVersions::H3,
-                        ech_config: Some(ECH_CONFIG.to_vec()),
+                        ech_config: Some(ech_config()),
                     },
                 }),
             ),
@@ -314,7 +315,7 @@ fn partial_ech_two_service_infos() {
                 endpoint: Endpoint {
                     address: SocketAddr::new(V4_ADDR_2.into(), SVC1_PORT),
                     http_version: ConnectionAttemptHttpVersions::H2,
-                    ech_config: Some(ECH_CONFIG.to_vec()),
+                    ech_config: Some(ech_config()),
                 },
             }),
         )],
@@ -362,7 +363,7 @@ fn both_service_infos_have_ech_no_origin_fallback() {
                             alpn_http_versions: HashSet::from([HttpVersion::H3]),
                             ipv6_hints: vec![],
                             ipv4_hints: vec![],
-                            ech_config: Some(ECH_CONFIG.to_vec()),
+                            ech_config: Some(ech_config()),
                             port: Some(SVC1_PORT),
                         },
                         ServiceInfo {
@@ -371,7 +372,7 @@ fn both_service_infos_have_ech_no_origin_fallback() {
                             alpn_http_versions: HashSet::from([HttpVersion::H2]),
                             ipv6_hints: vec![],
                             ipv4_hints: vec![],
-                            ech_config: Some(ECH_CONFIG.to_vec()),
+                            ech_config: Some(ech_config()),
                             port: Some(SVC2_PORT),
                         },
                     ])),
@@ -433,7 +434,7 @@ fn both_service_infos_have_ech_no_origin_fallback() {
                     endpoint: Endpoint {
                         address: SocketAddr::new(V4_ADDR_2.into(), SVC1_PORT),
                         http_version: ConnectionAttemptHttpVersions::H3,
-                        ech_config: Some(ECH_CONFIG.to_vec()),
+                        ech_config: Some(ech_config()),
                     },
                 }),
             ),
@@ -466,7 +467,7 @@ fn both_service_infos_have_ech_no_origin_fallback() {
                 endpoint: Endpoint {
                     address: SocketAddr::new(V4_ADDR_2.into(), SVC1_PORT),
                     http_version: ConnectionAttemptHttpVersions::H2,
-                    ech_config: Some(ECH_CONFIG.to_vec()),
+                    ech_config: Some(ech_config()),
                 },
             },
             // priority=2 (SVC2, port 10443, ech)
@@ -475,7 +476,7 @@ fn both_service_infos_have_ech_no_origin_fallback() {
                 endpoint: Endpoint {
                     address: SocketAddr::new(V4_ADDR.into(), SVC2_PORT),
                     http_version: ConnectionAttemptHttpVersions::H3,
-                    ech_config: Some(ECH_CONFIG.to_vec()),
+                    ech_config: Some(ech_config()),
                 },
             },
             Output::AttemptConnection {
@@ -483,7 +484,7 @@ fn both_service_infos_have_ech_no_origin_fallback() {
                 endpoint: Endpoint {
                     address: SocketAddr::new(V4_ADDR.into(), SVC2_PORT),
                     http_version: ConnectionAttemptHttpVersions::H2,
-                    ech_config: Some(ECH_CONFIG.to_vec()),
+                    ech_config: Some(ech_config()),
                 },
             },
         ],
@@ -538,7 +539,7 @@ fn partial_ech_with_alt_svc() {
                             alpn_http_versions: HashSet::from([HttpVersion::H3]),
                             ipv6_hints: vec![],
                             ipv4_hints: vec![],
-                            ech_config: Some(ECH_CONFIG.to_vec()),
+                            ech_config: Some(ech_config()),
                             port: Some(SVC1_PORT),
                         },
                         ServiceInfo {
@@ -593,7 +594,7 @@ fn partial_ech_with_alt_svc() {
                     endpoint: Endpoint {
                         address: SocketAddr::new(V4_ADDR_2.into(), SVC1_PORT),
                         http_version: ConnectionAttemptHttpVersions::H3,
-                        ech_config: Some(ECH_CONFIG.to_vec()),
+                        ech_config: Some(ech_config()),
                     },
                 }),
             ),
@@ -611,7 +612,7 @@ fn partial_ech_with_alt_svc() {
                 endpoint: Endpoint {
                     address: SocketAddr::new(V4_ADDR_2.into(), SVC1_PORT),
                     http_version: ConnectionAttemptHttpVersions::H2,
-                    ech_config: Some(ECH_CONFIG.to_vec()),
+                    ech_config: Some(ech_config()),
                 },
             }),
         )],
@@ -1325,4 +1326,163 @@ fn https_fallback_uses_default_http_versions() {
 
     // Fallback on port 443 must use default H2OrH1, NOT H3.
     he.expect_connection_attempts(&mut now, vec![out_attempt_v4_h1_h2(Id::from(4))]);
+}
+
+/// When a connection attempt fails with `EchRetry`, the state machine should
+/// emit a new connection attempt to the same endpoint with the new ECH config.
+///
+/// Setup:
+///   HTTPS record with ECH config, AAAA positive.
+///   First connection attempt uses original ECH config.
+///   Server rejects ECH and provides retry_configs.
+///   State machine emits a new attempt with updated ECH config.
+#[test]
+fn ech_retry_same_endpoint() {
+    let (now, mut he) = setup();
+
+    let new_ech_config = EchConfig::new(vec![10, 20, 30, 40, 50]);
+
+    he.expect(
+        vec![
+            (None, Some(out_send_dns_https(Id::from(0)))),
+            (None, Some(out_send_dns_aaaa(Id::from(1)))),
+            (None, Some(out_send_dns_a(Id::from(2)))),
+            (
+                Some(Input::DnsResult {
+                    id: Id::from(0),
+                    result: DnsResult::Https(Ok(vec![ServiceInfo {
+                        priority: 1,
+                        target_name: HOSTNAME.into(),
+                        alpn_http_versions: HashSet::from([HttpVersion::H2]),
+                        ipv6_hints: vec![],
+                        ipv4_hints: vec![],
+                        ech_config: Some(ech_config()),
+                        port: None,
+                    }])),
+                }),
+                Some(out_resolution_delay()),
+            ),
+            (
+                Some(in_dns_aaaa_positive(Id::from(1))),
+                // First connection attempt with original ECH config.
+                Some(Output::AttemptConnection {
+                    id: Id::from(3),
+                    endpoint: Endpoint {
+                        address: SocketAddr::new(V6_ADDR.into(), PORT),
+                        http_version: ConnectionAttemptHttpVersions::H2,
+                        ech_config: Some(ech_config()),
+                    },
+                }),
+            ),
+            (None, Some(out_connection_attempt_delay())),
+            // Server rejects ECH and provides retry_configs.
+            (
+                Some(Input::ConnectionResult {
+                    id: Id::from(3),
+                    result: ConnectionResult::EchRetry(new_ech_config.clone()),
+                }),
+                // State machine emits a new attempt with the new ECH config
+                // immediately (no delay — this is a server-initiated retry,
+                // not a new candidate).
+                Some(Output::AttemptConnection {
+                    id: Id::from(4),
+                    endpoint: Endpoint {
+                        address: SocketAddr::new(V6_ADDR.into(), PORT),
+                        http_version: ConnectionAttemptHttpVersions::H2,
+                        ech_config: Some(new_ech_config.clone()),
+                    },
+                }),
+            ),
+        ],
+        now,
+    );
+}
+
+/// Per RFC 9849 Section 6.1.6:
+///
+/// > Clients SHOULD NOT accept "retry_config" in response to a connection
+/// > initiated in response to a "retry_config".
+///
+/// The state machine must ignore `EchRetry` on an ECH-retried attempt and
+/// treat it as a plain failure, then fall through to remaining endpoints.
+#[test]
+fn ech_retry_no_infinite_loop() {
+    let (now, mut he) = setup();
+
+    let retry_ech_config = EchConfig::new(vec![10, 20, 30, 40, 50]);
+    let retry_ech_config_2 = EchConfig::new(vec![60, 70, 80]);
+
+    he.expect(
+        vec![
+            (None, Some(out_send_dns_https(Id::from(0)))),
+            (None, Some(out_send_dns_aaaa(Id::from(1)))),
+            (None, Some(out_send_dns_a(Id::from(2)))),
+            (
+                Some(Input::DnsResult {
+                    id: Id::from(0),
+                    result: DnsResult::Https(Ok(vec![ServiceInfo {
+                        priority: 1,
+                        target_name: HOSTNAME.into(),
+                        alpn_http_versions: HashSet::from([HttpVersion::H2]),
+                        ipv6_hints: vec![],
+                        ipv4_hints: vec![],
+                        ech_config: Some(ech_config()),
+                        port: None,
+                    }])),
+                }),
+                Some(out_resolution_delay()),
+            ),
+            (
+                Some(in_dns_aaaa_positive(Id::from(1))),
+                Some(Output::AttemptConnection {
+                    id: Id::from(3),
+                    endpoint: Endpoint {
+                        address: SocketAddr::new(V6_ADDR.into(), PORT),
+                        http_version: ConnectionAttemptHttpVersions::H2,
+                        ech_config: Some(ech_config()),
+                    },
+                }),
+            ),
+            (None, Some(out_connection_attempt_delay())),
+            // First EchRetry: accepted, new attempt emitted.
+            (
+                Some(Input::ConnectionResult {
+                    id: Id::from(3),
+                    result: ConnectionResult::EchRetry(retry_ech_config.clone()),
+                }),
+                Some(Output::AttemptConnection {
+                    id: Id::from(4),
+                    endpoint: Endpoint {
+                        address: SocketAddr::new(V6_ADDR.into(), PORT),
+                        http_version: ConnectionAttemptHttpVersions::H2,
+                        ech_config: Some(retry_ech_config.clone()),
+                    },
+                }),
+            ),
+            (None, Some(out_connection_attempt_delay())),
+            // Second EchRetry on the retried attempt: ignored, treated as
+            // failure. A record still pending, so resolution delay.
+            (
+                Some(Input::ConnectionResult {
+                    id: Id::from(4),
+                    result: ConnectionResult::EchRetry(retry_ech_config_2),
+                }),
+                Some(out_resolution_delay()),
+            ),
+            // A record arrives, next endpoint attempted (V4, original ECH
+            // from DNS).
+            (
+                Some(in_dns_a_positive(Id::from(2))),
+                Some(Output::AttemptConnection {
+                    id: Id::from(5),
+                    endpoint: Endpoint {
+                        address: SocketAddr::new(V4_ADDR.into(), PORT),
+                        http_version: ConnectionAttemptHttpVersions::H2,
+                        ech_config: Some(ech_config()),
+                    },
+                }),
+            ),
+        ],
+        now,
+    );
 }

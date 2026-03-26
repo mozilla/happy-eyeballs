@@ -80,7 +80,49 @@ pub enum Input {
     DnsResult { id: Id, result: DnsResult },
 
     /// Connection attempt result
-    ConnectionResult { id: Id, result: Result<(), String> },
+    ConnectionResult { id: Id, result: ConnectionResult },
+}
+
+/// An ECH (Encrypted Client Hello) configuration.
+///
+/// Wraps the raw bytes of one or more serialised `ECHConfig` structures
+/// as defined in [RFC 9849 Section 4].
+///
+/// [RFC 9849 Section 4]: https://datatracker.ietf.org/doc/html/rfc9849#section-4
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EchConfig(Vec<u8>);
+
+impl EchConfig {
+    pub fn new(bytes: Vec<u8>) -> Self {
+        Self(bytes)
+    }
+}
+
+impl AsRef<[u8]> for EchConfig {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+/// Result of a connection attempt.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConnectionResult {
+    /// Connection succeeded.
+    Success,
+    /// Connection failed.
+    Failure(String),
+    /// The server rejected ECH but provided `retry_configs` (per [RFC 9849
+    /// Section 6.1.6]). The state machine will schedule a new connection
+    /// attempt to the **same endpoint** (address + HTTP version) using the
+    /// updated ECH config.
+    ///
+    /// A retry to a retry will be ignored. See RFC:
+    ///
+    /// > Clients SHOULD NOT accept "retry_config" in response to a connection
+    /// > initiated in response to a "retry_config".
+    ///
+    /// [RFC 9849 Section 6.1.6]: https://datatracker.ietf.org/doc/html/rfc9849#section-6.1.6
+    EchRetry(EchConfig),
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -223,7 +265,7 @@ pub struct ServiceInfo {
     pub priority: u16,
     pub target_name: TargetName,
     pub alpn_http_versions: HashSet<HttpVersion>,
-    pub ech_config: Option<Vec<u8>>,
+    pub ech_config: Option<EchConfig>,
     pub ipv4_hints: Vec<Ipv4Addr>,
     pub ipv6_hints: Vec<Ipv6Addr>,
     pub port: Option<u16>,
@@ -568,6 +610,10 @@ pub struct ConnectionAttempt {
     pub endpoint: Endpoint,
     pub started: Instant,
     pub state: ConnectionState,
+    /// Whether this attempt was initiated by an ECH retry_config.
+    /// Per RFC 9849 Section 6.1.6, a second EchRetry on such an attempt
+    /// must be treated as a failure.
+    pub is_ech_retry: bool,
 }
 
 impl ConnectionAttempt {
@@ -581,7 +627,7 @@ impl ConnectionAttempt {
 pub struct Endpoint {
     pub address: SocketAddr,
     pub http_version: ConnectionAttemptHttpVersions,
-    pub ech_config: Option<Vec<u8>>,
+    pub ech_config: Option<EchConfig>,
 }
 
 impl Endpoint {
@@ -633,6 +679,9 @@ pub struct HappyEyeballs {
     id_generator: IdGenerator,
     dns_queries: Vec<DnsQuery>,
     connection_attempts: Vec<ConnectionAttempt>,
+    /// ECH retries received over the lifetime of this state machine.
+    /// Each entry is `(previous_attempt_id, new_ech_config)`.
+    ech_retries: Vec<(Id, EchConfig)>,
     /// Network configuration
     network_config: NetworkConfig,
     host: Host,
@@ -673,6 +722,9 @@ impl std::fmt::Debug for HappyEyeballs {
         if !self.connection_attempts.is_empty() {
             ds.field("connection_attempts", &self.connection_attempts);
         }
+        if !self.ech_retries.is_empty() {
+            ds.field("ech_retries", &self.ech_retries);
+        }
 
         ds.finish()
     }
@@ -704,6 +756,7 @@ impl HappyEyeballs {
             network_config,
             dns_queries: Vec::new(),
             connection_attempts: Vec::new(),
+            ech_retries: Vec::new(),
             host,
             port,
         };
@@ -934,7 +987,7 @@ impl HappyEyeballs {
         };
     }
 
-    fn on_connection_result(&mut self, id: Id, result: Result<(), String>) {
+    fn on_connection_result(&mut self, id: Id, result: ConnectionResult) {
         let Some(attempt) = self.connection_attempts.iter_mut().find(|a| a.id == id) else {
             debug_assert!(false, "got connection result for unknown id {id:?}");
             return;
@@ -956,17 +1009,29 @@ impl HappyEyeballs {
         }
 
         match result {
-            Ok(()) => {
-                // Mark this connection as succeeded
+            ConnectionResult::Success => {
                 attempt.state = ConnectionState::Succeeded;
                 // Cancellations will be issued by cancel_remaining_attempts()
             }
-            Err(_error) => {
-                // Mark connection as failed
+            ConnectionResult::Failure(_error) => {
                 attempt.state = ConnectionState::Failed;
-
                 // The state machine will naturally attempt the next connection
                 // when process() is called again with None input
+            }
+            ConnectionResult::EchRetry(ech_config) => {
+                attempt.state = ConnectionState::Failed;
+
+                // > Clients SHOULD NOT accept "retry_config" in response
+                // > to a connection initiated in response to a
+                // > "retry_config".
+                //
+                // https://datatracker.ietf.org/doc/html/rfc9849#section-6.1.6
+                if attempt.is_ech_retry {
+                    log::debug!("ignoring EchRetry on attempt {id:?} that is itself an ECH retry");
+                    return;
+                }
+
+                self.ech_retries.push((id, ech_config));
             }
         }
     }
@@ -1008,6 +1073,11 @@ impl HappyEyeballs {
     ///
     /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2>
     fn connection_attempt(&mut self, now: Instant) -> Option<Output> {
+        // ECH retries are emitted immediately, bypassing move-on and delay checks.
+        if let Some(o) = self.ech_retry_attempt(now) {
+            return Some(o);
+        }
+
         let mut move_on = false;
         move_on |= self.move_on_without_timeout();
         move_on |= self.move_on_with_timeout(now);
@@ -1037,6 +1107,34 @@ impl HappyEyeballs {
             endpoint: endpoint.clone(),
             started: now,
             state: ConnectionState::InProgress,
+            is_ech_retry: false,
+        });
+
+        Some(Output::AttemptConnection { id, endpoint })
+    }
+
+    /// Emit a connection attempt for a pending ECH retry, if any.
+    fn ech_retry_attempt(&mut self, now: Instant) -> Option<Output> {
+        let endpoint = self.ech_retries.iter().find_map(|(prev_id, ech_config)| {
+            let prev = self.connection_attempts.iter().find(|a| a.id == *prev_id)?;
+            let endpoint = Endpoint {
+                ech_config: Some(ech_config.clone()),
+                ..prev.endpoint.clone()
+            };
+            let already_attempted = self
+                .connection_attempts
+                .iter()
+                .any(|a| a.endpoint == endpoint);
+            (!already_attempted).then_some(endpoint)
+        })?;
+
+        let id = self.id_generator.next_id();
+        self.connection_attempts.push(ConnectionAttempt {
+            id,
+            endpoint: endpoint.clone(),
+            started: now,
+            state: ConnectionState::InProgress,
+            is_ech_retry: true,
         });
 
         Some(Output::AttemptConnection { id, endpoint })
