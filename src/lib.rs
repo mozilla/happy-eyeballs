@@ -1026,6 +1026,11 @@ impl HappyEyeballs {
                     return;
                 }
 
+                if attempt.endpoint.ech_config.is_none() {
+                    debug_assert!(false, "got EchRetry on attempt {id:?} but ECH was not sent");
+                    return;
+                }
+
                 // > Clients SHOULD NOT accept "retry_config" in response
                 // > to a connection initiated in response to a
                 // > "retry_config".
