@@ -11,7 +11,8 @@ use std::{
 
 use happy_eyeballs::{
     CONNECTION_ATTEMPT_DELAY, ConnectionAttemptHttpVersions, DnsRecordType, DnsResult, Endpoint,
-    HappyEyeballs, HttpVersions, Id, Input, IpPreference, NetworkConfig, Output, RESOLUTION_DELAY,
+    FailureReason, HappyEyeballs, HttpVersions, Id, Input, IpPreference, NetworkConfig, Output,
+    RESOLUTION_DELAY,
 };
 
 fn expect_hints_move_on_with_timeout(
@@ -316,10 +317,17 @@ fn resolution_delay_starts_on_first_response() {
 /// > algorithm when A and AAAA records corresponding to the TargetName
 /// > are not available yet.
 ///
+/// HTTPS arrives first with both v6 and v4 hints while AAAA and A are still
+/// in-flight. After the resolution timeout the v6 hint is used. When AAAA
+/// and A subsequently arrive with negative answers, both hints are discarded
+/// — a negative answer replaces hints per the draft: "when those records are
+/// received, they replace the hints". After the in-flight v6 attempt fails,
+/// no v4 attempt follows (v4 hint was discarded when A returned negative).
+///
 /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2.1>
 #[test]
 fn https_hints() {
-    let (now, mut he) = setup();
+    let (mut now, mut he) = setup();
 
     he.expect(
         vec![
@@ -327,16 +335,34 @@ fn https_hints() {
             (None, Some(out_send_dns_aaaa(Id::from(1)))),
             (None, Some(out_send_dns_a(Id::from(2)))),
             (
-                Some(in_dns_aaaa_negative(Id::from(1))),
+                Some(in_dns_https_positive_v4_and_v6_hints(Id::from(0))),
                 Some(out_resolution_delay()),
+            ),
+        ],
+        now,
+    );
+
+    now += RESOLUTION_DELAY;
+    he.expect(
+        vec![
+            (None, Some(out_attempt_v6_h3(Id::from(3)))),
+            (None, Some(out_connection_attempt_delay())),
+            // AAAA and A arrive negative: both hints are discarded. The
+            // connection attempt delay is re-emitted while the in-flight
+            // v6 attempt is still pending.
+            (
+                Some(in_dns_aaaa_negative(Id::from(1))),
+                Some(out_connection_attempt_delay()),
             ),
             (
                 Some(in_dns_a_negative(Id::from(2))),
-                Some(out_resolution_delay()),
+                Some(out_connection_attempt_delay()),
             ),
+            // The v6 attempt fails. No v4 retry — v4 hint was discarded when
+            // A returned a negative answer.
             (
-                Some(in_dns_https_positive_v6_hints(Id::from(0))),
-                Some(out_attempt_v6_h3(Id::from(3))),
+                Some(in_connection_result_negative(Id::from(3))),
+                Some(Output::Failed(FailureReason::Connection)),
             ),
         ],
         now,

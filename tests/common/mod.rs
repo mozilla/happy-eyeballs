@@ -74,6 +74,21 @@ pub fn in_dns_https_positive(id: Id) -> Input {
     }
 }
 
+pub fn in_dns_https_positive_ech(id: Id) -> Input {
+    Input::DnsResult {
+        id,
+        result: DnsResult::Https(Ok(vec![ServiceInfo {
+            priority: 1,
+            target_name: HOSTNAME.into(),
+            alpn_http_versions: HashSet::from([HttpVersion::H3, HttpVersion::H2]),
+            ipv6_hints: vec![],
+            ipv4_hints: vec![],
+            ech_config: Some(ech_config()),
+            port: None,
+        }])),
+    }
+}
+
 pub fn in_dns_https_positive_no_alpn(id: Id) -> Input {
     Input::DnsResult {
         id,
@@ -110,6 +125,10 @@ pub fn in_dns_https_positive_v6_hints(id: Id) -> Input {
 
 pub fn in_dns_https_positive_v4_hints(id: Id) -> Input {
     in_dns_https_with_hints(id, vec![V4_ADDR], vec![])
+}
+
+pub fn in_dns_https_positive_v4_and_v6_hints(id: Id) -> Input {
+    in_dns_https_with_hints(id, vec![V4_ADDR], vec![V6_ADDR])
 }
 
 pub fn in_dns_https_positive_svc1(id: Id) -> Input {
