@@ -1464,3 +1464,36 @@ impl HappyEyeballs {
             .any(|completed| now.duration_since(*completed) >= self.network_config.resolution_delay)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::net::{Ipv4Addr, Ipv6Addr};
+
+    use super::*;
+
+    #[test]
+    fn dns_result_has_addrs() {
+        for result in [
+            DnsResult::Aaaa(Ok(vec![])),
+            DnsResult::Aaaa(Err(())),
+            DnsResult::A(Ok(vec![])),
+            DnsResult::A(Err(())),
+            DnsResult::Https(Err(())),
+            DnsResult::Https(Ok(vec![])),
+        ] {
+            assert!(!result.has_addrs());
+        }
+        assert!(DnsResult::Aaaa(Ok(vec![Ipv6Addr::LOCALHOST])).has_addrs());
+        assert!(DnsResult::A(Ok(vec![Ipv4Addr::LOCALHOST])).has_addrs());
+    }
+
+    #[test]
+    fn host_display() {
+        let v4 = Ipv4Addr::LOCALHOST;
+        assert_eq!(Host::Ip(v4.into()).to_string(), v4.to_string());
+        let v6 = Ipv6Addr::LOCALHOST;
+        assert_eq!(Host::Ip(v6.into()).to_string(), v6.to_string());
+        let domain = "example.com";
+        assert_eq!(Host::Domain(domain.into()).to_string(), domain);
+    }
+}
