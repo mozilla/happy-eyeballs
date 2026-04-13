@@ -86,7 +86,7 @@ fn conn_success(id: Id) -> Input {
 fn conn_failure(id: Id) -> Input {
     Input::ConnectionResult {
         id,
-        result: ConnectionResult::Failure("timeout".to_string()),
+        result: ConnectionResult::Failure(String::new()),
     }
 }
 
