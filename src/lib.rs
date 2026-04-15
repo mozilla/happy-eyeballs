@@ -81,6 +81,24 @@ pub enum Input {
 
     /// Connection attempt result
     ConnectionResult { id: Id, result: ConnectionResult },
+
+    /// HTTP settings received on a connection (HTTP/2 SETTINGS frame, HTTP/3
+    /// SETTINGS).
+    ///
+    /// Must be reported after [`ConnectionResult::Success`] for HTTP/2 and
+    /// HTTP/3 connections when [`Protocol::WebSocket`] or
+    /// [`Protocol::WebTransport`] is requested.
+    ///
+    /// Not applicable for HTTP/1.1 connections (no settings exchange).
+    HttpSettings { id: Id, settings: HttpSettings },
+
+    /// Result of a WebSocket opening handshake or WebTransport session
+    /// establishment, reported after the state machine emits
+    /// [`Output::EstablishProtocolSession`].
+    ProtocolSessionResult {
+        id: Id,
+        result: ProtocolSessionResult,
+    },
 }
 
 /// An ECH (Encrypted Client Hello) configuration.
@@ -104,11 +122,98 @@ impl AsRef<[u8]> for EchConfig {
     }
 }
 
+/// HTTP settings received from the server on an HTTP/2 or HTTP/3 connection.
+///
+/// The state machine uses these to decide whether the server supports the
+/// requested protocol (WebSocket or WebTransport) before emitting
+/// [`Output::EstablishProtocolSession`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HttpSettings {
+    /// Whether the server advertised `SETTINGS_ENABLE_CONNECT_PROTOCOL` (0x08).
+    ///
+    /// Required for WebSocket over HTTP/2 ([RFC 8441]) and HTTP/3 ([RFC 9220]),
+    /// and for WebTransport.
+    ///
+    /// [RFC 8441]: https://datatracker.ietf.org/doc/html/rfc8441
+    /// [RFC 9220]: https://datatracker.ietf.org/doc/html/rfc9220
+    pub extended_connect_supported: bool,
+
+    /// Whether the server supports WebTransport.
+    ///
+    /// For HTTP/3: `SETTINGS_WT_ENABLED` is non-zero.
+    /// For HTTP/2: `SETTINGS_WT_MAX_SESSIONS` is greater than zero.
+    pub webtransport_supported: bool,
+}
+
+/// Result of a WebSocket opening handshake or WebTransport session
+/// establishment.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProtocolSessionResult {
+    /// The protocol session was established successfully.
+    ///
+    /// For WebSocket: received 101 (HTTP/1.1) or 200 (HTTP/2, HTTP/3).
+    /// For WebTransport: received 2xx response to Extended CONNECT.
+    Success,
+
+    /// The protocol session could not be established.
+    ///
+    /// The server rejected the WebSocket upgrade / Extended CONNECT request,
+    /// or the handshake failed for another reason.
+    Failure,
+}
+
+/// The kind of session to establish on top of the transport connection.
+///
+/// Specified at construction time via [`NetworkConfig::session`]. When set,
+/// the state machine drives a multi-phase connection flow:
+///
+/// 1. Transport connection (TCP+TLS or QUIC)
+/// 2. HTTP settings discovery (HTTP/2, HTTP/3 only)
+/// 3. Protocol session establishment (opening handshake / Extended CONNECT)
+///
+/// When [`NetworkConfig::session`] is `None` (the default), the state machine
+/// reports success as soon as the transport connection is established (plain
+/// HTTP behavior).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Session {
+    /// WebSocket ([RFC 6455], [RFC 8441], [RFC 9220]).
+    ///
+    /// - Over HTTP/1.1: opening handshake via HTTP Upgrade.
+    /// - Over HTTP/2: Extended CONNECT with `:protocol = websocket`
+    ///   (requires `SETTINGS_ENABLE_CONNECT_PROTOCOL`).
+    /// - Over HTTP/3: Extended CONNECT with `:protocol = websocket`
+    ///   (requires `SETTINGS_ENABLE_CONNECT_PROTOCOL`).
+    ///
+    /// [RFC 6455]: https://datatracker.ietf.org/doc/html/rfc6455
+    /// [RFC 8441]: https://datatracker.ietf.org/doc/html/rfc8441
+    /// [RFC 9220]: https://datatracker.ietf.org/doc/html/rfc9220
+    WebSocket,
+
+    /// WebTransport ([draft-ietf-webtrans-http3], [draft-ietf-webtrans-http2]).
+    ///
+    /// - Over HTTP/3: Extended CONNECT with `:protocol = webtransport-h3`
+    ///   (requires `SETTINGS_ENABLE_CONNECT_PROTOCOL` and `SETTINGS_WT_ENABLED`).
+    /// - Over HTTP/2: Extended CONNECT with `:protocol = webtransport`
+    ///   (requires `SETTINGS_ENABLE_CONNECT_PROTOCOL` and
+    ///   `SETTINGS_WT_MAX_SESSIONS > 0`).
+    /// - HTTP/1.1 is not supported; H1 endpoints are automatically excluded.
+    ///
+    /// [draft-ietf-webtrans-http3]: https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-http3
+    /// [draft-ietf-webtrans-http2]: https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-http2
+    WebTransport,
+}
+
 /// Result of a connection attempt.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConnectionResult {
     /// Connection succeeded.
-    Success,
+    ///
+    /// `http_version` is the HTTP version actually negotiated on this
+    /// connection (via TLS ALPN or equivalent). For
+    /// [`ConnectionAttemptHttpVersions::H2OrH1`] attempts this tells the state
+    /// machine which version was selected; for single-version attempts it
+    /// should match the attempt's version.
+    Success { http_version: HttpVersion },
     /// Connection failed.
     Failure(String),
     /// The server rejected ECH but provided `retry_configs` (per [RFC 9849
@@ -225,6 +330,36 @@ pub enum Output {
     /// Cancel a connection attempt
     CancelConnection { id: Id },
 
+    /// Establish a WebSocket or WebTransport session on this connection.
+    ///
+    /// The `id` matches the one from the earlier [`Output::AttemptConnection`]
+    /// that created this connection. The caller should use this to identify
+    /// which transport connection to perform the handshake on.
+    ///
+    /// The caller should perform the protocol-specific handshake based on
+    /// `session` and the connection's HTTP version:
+    ///
+    /// - **[`Session::WebSocket`] over HTTP/1.1**: send the opening handshake
+    ///   ([RFC 6455]).
+    /// - **[`Session::WebSocket`] over HTTP/2 or HTTP/3**: send an Extended
+    ///   CONNECT request with `:protocol = websocket`
+    ///   ([RFC 8441], [RFC 9220]).
+    /// - **[`Session::WebTransport`] over HTTP/3**: send an Extended CONNECT
+    ///   request with `:protocol = webtransport-h3`
+    ///   ([draft-ietf-webtrans-http3]).
+    /// - **[`Session::WebTransport`] over HTTP/2**: send an Extended CONNECT
+    ///   request with `:protocol = webtransport`
+    ///   ([draft-ietf-webtrans-http2]).
+    ///
+    /// Report the result via [`Input::ProtocolSessionResult`].
+    ///
+    /// [RFC 6455]: https://datatracker.ietf.org/doc/html/rfc6455
+    /// [RFC 8441]: https://datatracker.ietf.org/doc/html/rfc8441
+    /// [RFC 9220]: https://datatracker.ietf.org/doc/html/rfc9220
+    /// [draft-ietf-webtrans-http3]: https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-http3
+    /// [draft-ietf-webtrans-http2]: https://datatracker.ietf.org/doc/html/draft-ietf-webtrans-http2
+    EstablishProtocolSession { id: Id, session: Session },
+
     /// Connection attempt succeeded
     Succeeded,
 
@@ -240,6 +375,13 @@ pub enum FailureReason {
     DnsResolution,
     /// All connection attempts failed.
     Connection,
+    /// At least one transport connection succeeded, but the server does not
+    /// support the requested protocol (WebSocket or WebTransport).
+    ///
+    /// This means the server's HTTP settings did not advertise the required
+    /// capabilities (e.g. `SETTINGS_ENABLE_CONNECT_PROTOCOL`) or the protocol
+    /// session establishment was rejected on every connection.
+    ProtocolNotSupported,
 }
 
 impl Output {
@@ -526,19 +668,18 @@ pub struct AltSvc {
 // see whether the remote supports HTTP/3? Should it first do MASQUE connect-udp
 // and HTTP/3 and then HTTP CONNECT with HTTP/2?
 //
-// TODO: Should we make HappyEyeballs aware of whether this is a WebSocket
-// connection? That way we could e.g. track EXTENDED CONNECT support, or
-// fallback to a different connection in case WebSocket doesn't work? Likely for
-// v2 of the project.
-//
-// TODO: Should we make HappyEyeballs aware of whether this is a WebTransport
-// connection? That way we could e.g. track EXTENDED CONNECT support, or
-// fallback to a different connection in case WebTransport doesn't work? Likely
-// for v2 of the project.
-//
 /// Network configuration for Happy Eyeballs behavior
 #[derive(Debug, Clone)]
 pub struct NetworkConfig {
+    /// The session to establish on top of the transport connection.
+    ///
+    /// `None` (the default) means plain HTTP — the state machine reports
+    /// success as soon as the transport connection is established.
+    ///
+    /// When set to [`Some(Session::WebSocket)`] or
+    /// [`Some(Session::WebTransport)`], the state machine drives a multi-phase
+    /// flow: transport → settings discovery → session establishment.
+    pub session: Option<Session>,
     /// Supported HTTP versions
     pub http_versions: HttpVersions,
     /// IP connectivity and preference
@@ -569,6 +710,7 @@ pub struct NetworkConfig {
 impl Default for NetworkConfig {
     fn default() -> Self {
         NetworkConfig {
+            session: None,
             http_versions: HttpVersions::default(),
             ip: IpPreference::DualStackPreferV6,
             alt_svc: Vec::new(),
@@ -605,7 +747,15 @@ impl NetworkConfig {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum ConnectionState {
+    /// Transport connection in progress (TCP+TLS handshake or QUIC handshake).
     InProgress,
+    /// Transport connection established, waiting for HTTP settings or session
+    /// establishment. Only used when [`NetworkConfig::session`] is `Some`.
+    Connected { http_version: HttpVersion },
+    /// Session establishment in progress — the state machine has emitted
+    /// [`Output::EstablishProtocolSession`] and is waiting for
+    /// [`Input::ProtocolSessionResult`].
+    SessionEstablishment,
     Succeeded,
     Failed,
     Cancelled,
@@ -621,6 +771,12 @@ pub struct ConnectionAttempt {
     /// Per RFC 9849 Section 6.1.6, a second EchRetry on such an attempt
     /// must be treated as a failure.
     pub is_ech_retry: bool,
+    /// HTTP settings received from the server (HTTP/2 or HTTP/3 only).
+    pub settings: Option<HttpSettings>,
+    /// Whether this connection failed because the server does not support the
+    /// requested session (WebSocket or WebTransport). Tracked separately to
+    /// report [`FailureReason::ProtocolNotSupported`].
+    pub protocol_not_supported: bool,
 }
 
 impl ConnectionAttempt {
@@ -786,6 +942,12 @@ impl HappyEyeballs {
             Input::ConnectionResult { id, result } => {
                 self.on_connection_result(id, result);
             }
+            Input::HttpSettings { id, settings } => {
+                self.on_http_settings(id, settings);
+            }
+            Input::ProtocolSessionResult { id, result } => {
+                self.on_protocol_session_result(id, result);
+            }
         }
     }
 
@@ -806,6 +968,11 @@ impl HappyEyeballs {
     fn process_output_inner(&mut self, now: Instant) -> Option<Output> {
         // Check if we have any successful connection that requires canceling other attempts.
         if let Some(o) = self.cancel_remaining_attempts() {
+            return Some(o);
+        }
+
+        // Establish protocol sessions on eligible connections.
+        if let Some(o) = self.establish_protocol_session() {
             return Some(o);
         }
 
@@ -1006,7 +1173,10 @@ impl HappyEyeballs {
                 log::debug!("ignoring connection result for cancelled attempt {id:?}: {result:?}");
                 return;
             }
-            ConnectionState::Succeeded | ConnectionState::Failed => {
+            ConnectionState::Succeeded
+            | ConnectionState::Failed
+            | ConnectionState::Connected { .. }
+            | ConnectionState::SessionEstablishment => {
                 debug_assert!(
                     false,
                     "got connection result but attempt is in unexpected state: {attempt:?}"
@@ -1016,8 +1186,18 @@ impl HappyEyeballs {
         }
 
         match result {
-            ConnectionResult::Success => {
-                attempt.state = ConnectionState::Succeeded;
+            ConnectionResult::Success { http_version } => {
+                match self.network_config.session {
+                    None => {
+                        // Plain HTTP: transport success = overall success.
+                        attempt.state = ConnectionState::Succeeded;
+                    }
+                    Some(_) => {
+                        // WebSocket / WebTransport: enter Connected phase,
+                        // wait for settings (H2/H3) or proceed directly (H1).
+                        attempt.state = ConnectionState::Connected { http_version };
+                    }
+                }
                 // Cancellations will be issued by cancel_remaining_attempts()
             }
             ConnectionResult::Failure(_error) => {
@@ -1053,26 +1233,161 @@ impl HappyEyeballs {
         }
     }
 
-    /// If a connection has succeeded, cancel all remaining in-progress attempts.
+    fn on_http_settings(&mut self, id: Id, settings: HttpSettings) {
+        let Some(attempt) = self.connection_attempts.iter_mut().find(|a| a.id == id) else {
+            debug_assert!(false, "got HttpSettings for unknown id {id:?}");
+            return;
+        };
+
+        match attempt.state {
+            ConnectionState::Connected { .. } => {}
+            ConnectionState::Cancelled => {
+                log::debug!("ignoring HttpSettings for cancelled attempt {id:?}");
+                return;
+            }
+            _ => {
+                debug_assert!(
+                    false,
+                    "got HttpSettings but attempt is in unexpected state: {attempt:?}"
+                );
+                return;
+            }
+        }
+
+        attempt.settings = Some(settings);
+        // The state machine will check eligibility for session establishment
+        // in the next process_output() call.
+    }
+
+    fn on_protocol_session_result(&mut self, id: Id, result: ProtocolSessionResult) {
+        let Some(attempt) = self.connection_attempts.iter_mut().find(|a| a.id == id) else {
+            debug_assert!(false, "got ProtocolSessionResult for unknown id {id:?}");
+            return;
+        };
+
+        match attempt.state {
+            ConnectionState::SessionEstablishment => {}
+            ConnectionState::Cancelled => {
+                log::debug!("ignoring ProtocolSessionResult for cancelled attempt {id:?}");
+                return;
+            }
+            _ => {
+                debug_assert!(
+                    false,
+                    "got ProtocolSessionResult but attempt is in unexpected state: {attempt:?}"
+                );
+                return;
+            }
+        }
+
+        match result {
+            ProtocolSessionResult::Success => {
+                attempt.state = ConnectionState::Succeeded;
+            }
+            ProtocolSessionResult::Failure => {
+                attempt.state = ConnectionState::Failed;
+                attempt.protocol_not_supported = true;
+            }
+        }
+    }
+
+    /// If a connection has succeeded, cancel all remaining non-terminal attempts.
+    ///
+    /// Cancels connections in any active state: `InProgress`, `Connected`, or
+    /// `SessionEstablishment`.
     fn cancel_remaining_attempts(&mut self) -> Option<Output> {
-        // Check if we have a successful connection
         if !self.has_successful_connection() {
             return None;
         }
 
-        // Find the first in-progress attempt to cancel
-        if let Some(attempt) = self
-            .connection_attempts
-            .iter_mut()
-            .find(|a| a.state == ConnectionState::InProgress)
-        {
+        if let Some(attempt) = self.connection_attempts.iter_mut().find(|a| {
+            matches!(
+                a.state,
+                ConnectionState::InProgress
+                    | ConnectionState::Connected { .. }
+                    | ConnectionState::SessionEstablishment
+            )
+        }) {
             let id = attempt.id;
             attempt.state = ConnectionState::Cancelled;
             return Some(Output::CancelConnection { id });
         }
 
-        // All connections have been canceled, return Succeeded
+        // All non-terminal attempts have been canceled, return Succeeded
         Some(Output::Succeeded)
+    }
+
+    /// Check connected attempts for session establishment eligibility.
+    ///
+    /// For each connection in the `Connected` state, determines whether the
+    /// server supports the requested session based on the HTTP version and
+    /// received settings:
+    ///
+    /// - **HTTP/1.1 + WebSocket**: eligible immediately (no settings needed).
+    /// - **HTTP/1.1 + WebTransport**: not possible — marked as failed.
+    /// - **HTTP/2 or HTTP/3**: eligible once [`HttpSettings`] arrives and
+    ///   confirms the required capabilities.
+    fn establish_protocol_session(&mut self) -> Option<Output> {
+        let session = self.network_config.session?;
+
+        for i in 0..self.connection_attempts.len() {
+            let attempt = &self.connection_attempts[i];
+
+            let http_version = match attempt.state {
+                ConnectionState::Connected { http_version } => http_version,
+                _ => continue,
+            };
+
+            match http_version {
+                HttpVersion::H1 => {
+                    match session {
+                        Session::WebSocket => {
+                            // H1 WebSocket: no settings needed, go directly
+                            // to session establishment.
+                            self.connection_attempts[i].state =
+                                ConnectionState::SessionEstablishment;
+                            let id = self.connection_attempts[i].id;
+                            return Some(Output::EstablishProtocolSession { id, session });
+                        }
+                        Session::WebTransport => {
+                            // WebTransport is not possible over HTTP/1.1.
+                            self.connection_attempts[i].state = ConnectionState::Failed;
+                            self.connection_attempts[i].protocol_not_supported = true;
+                            continue;
+                        }
+                    }
+                }
+                HttpVersion::H2 | HttpVersion::H3 => {
+                    let Some(settings) = &self.connection_attempts[i].settings else {
+                        // Settings not received yet — keep waiting.
+                        continue;
+                    };
+
+                    let supported = match session {
+                        Session::WebSocket => settings.extended_connect_supported,
+                        Session::WebTransport => {
+                            settings.extended_connect_supported
+                                && settings.webtransport_supported
+                        }
+                    };
+
+                    if supported {
+                        self.connection_attempts[i].state =
+                            ConnectionState::SessionEstablishment;
+                        let id = self.connection_attempts[i].id;
+                        return Some(Output::EstablishProtocolSession { id, session });
+                    } else {
+                        // Settings received but server doesn't support the
+                        // requested session.
+                        self.connection_attempts[i].state = ConnectionState::Failed;
+                        self.connection_attempts[i].protocol_not_supported = true;
+                        continue;
+                    }
+                }
+            }
+        }
+
+        None
     }
 
     /// > The client moves onto sorting addresses and establishing connections
@@ -1125,6 +1440,8 @@ impl HappyEyeballs {
             started: now,
             state: ConnectionState::InProgress,
             is_ech_retry: false,
+            settings: None,
+            protocol_not_supported: false,
         });
 
         Some(Output::AttemptConnection { id, endpoint })
@@ -1152,6 +1469,8 @@ impl HappyEyeballs {
             started: now,
             state: ConnectionState::InProgress,
             is_ech_retry: true,
+            settings: None,
+            protocol_not_supported: false,
         });
 
         Some(Output::AttemptConnection { id, endpoint })
@@ -1268,16 +1587,26 @@ impl HappyEyeballs {
     fn failed(&self) -> Option<FailureReason> {
         if self.has_successful_connection()
             || self.dns_queries.iter().any(|q| !q.is_completed())
-            || self
-                .connection_attempts
-                .iter()
-                .any(|a| a.state == ConnectionState::InProgress)
+            || self.connection_attempts.iter().any(|a| {
+                matches!(
+                    a.state,
+                    ConnectionState::InProgress
+                        | ConnectionState::Connected { .. }
+                        | ConnectionState::SessionEstablishment
+                )
+            })
         {
             return None;
         }
 
         Some(
             if self
+                .connection_attempts
+                .iter()
+                .any(|a| a.protocol_not_supported)
+            {
+                FailureReason::ProtocolNotSupported
+            } else if self
                 .connection_attempts
                 .iter()
                 .any(|a| a.state == ConnectionState::Failed)
@@ -1390,6 +1719,17 @@ impl HappyEyeballs {
             http_versions.remove(&HttpVersion::H2);
         }
         if !self.network_config.http_versions.h1 {
+            http_versions.remove(&HttpVersion::H1);
+        }
+        // WebTransport is not possible over HTTP/1.1. If the caller enabled
+        // H1 with a WebTransport session, that's a configuration error.
+        if self.network_config.session == Some(Session::WebTransport)
+            && http_versions.contains(&HttpVersion::H1)
+        {
+            debug_assert!(
+                false,
+                "HTTP/1.1 is enabled but WebTransport is not possible over HTTP/1.1"
+            );
             http_versions.remove(&HttpVersion::H1);
         }
     }

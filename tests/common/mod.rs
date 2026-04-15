@@ -8,8 +8,8 @@ use std::{
 
 use happy_eyeballs::{
     CONNECTION_ATTEMPT_DELAY, ConnectionAttemptHttpVersions, ConnectionResult, DnsRecordType,
-    DnsResult, EchConfig, Endpoint, HappyEyeballs, HttpVersion, Id, Input, NetworkConfig, Output,
-    RESOLUTION_DELAY, ServiceInfo,
+    DnsResult, EchConfig, Endpoint, HappyEyeballs, HttpSettings, HttpVersion, Id, Input,
+    NetworkConfig, Output, ProtocolSessionResult, RESOLUTION_DELAY, ServiceInfo, Session,
 };
 
 pub const HOSTNAME: &str = "example.com";
@@ -182,9 +182,13 @@ pub fn in_dns_a_negative(id: Id) -> Input {
 }
 
 pub fn in_connection_result_positive(id: Id) -> Input {
+    in_connection_result_positive_with_version(id, HttpVersion::H2)
+}
+
+pub fn in_connection_result_positive_with_version(id: Id, http_version: HttpVersion) -> Input {
     Input::ConnectionResult {
         id,
-        result: ConnectionResult::Success,
+        result: ConnectionResult::Success { http_version },
     }
 }
 
@@ -370,6 +374,147 @@ pub fn out_connection_attempt_delay() -> Output {
     Output::Timer {
         duration: CONNECTION_ATTEMPT_DELAY,
     }
+}
+
+pub fn in_http_settings(id: Id, extended_connect: bool, webtransport: bool) -> Input {
+    Input::HttpSettings {
+        id,
+        settings: HttpSettings {
+            extended_connect_supported: extended_connect,
+            webtransport_supported: webtransport,
+        },
+    }
+}
+
+pub fn in_http_settings_extended_connect(id: Id) -> Input {
+    in_http_settings(id, true, false)
+}
+
+pub fn in_http_settings_webtransport(id: Id) -> Input {
+    in_http_settings(id, true, true)
+}
+
+pub fn in_http_settings_no_extended_connect(id: Id) -> Input {
+    in_http_settings(id, false, false)
+}
+
+pub fn in_session_result_success(id: Id) -> Input {
+    Input::ProtocolSessionResult {
+        id,
+        result: ProtocolSessionResult::Success,
+    }
+}
+
+pub fn in_session_result_failure(id: Id) -> Input {
+    Input::ProtocolSessionResult {
+        id,
+        result: ProtocolSessionResult::Failure,
+    }
+}
+
+pub fn out_establish_websocket(id: Id) -> Output {
+    Output::EstablishProtocolSession {
+        id,
+        session: Session::WebSocket,
+    }
+}
+
+pub fn out_establish_webtransport(id: Id) -> Output {
+    Output::EstablishProtocolSession {
+        id,
+        session: Session::WebTransport,
+    }
+}
+
+/// Send DNS queries, provide HTTPS negative + AAAA positive + A negative,
+/// arrive at the first connection attempt.
+///
+/// Assumes default dual-stack-prefer-v6 with HOSTNAME.
+pub fn dns_phase_aaaa_only(
+    he: &mut HappyEyeballs,
+    now: Instant,
+    expected_attempt: Output,
+) {
+    he.expect(
+        vec![
+            (None, Some(out_send_dns_https(Id::from(0)))),
+            (None, Some(out_send_dns_aaaa(Id::from(1)))),
+            (None, Some(out_send_dns_a(Id::from(2)))),
+            (
+                Some(in_dns_aaaa_positive(Id::from(1))),
+                Some(out_resolution_delay()),
+            ),
+            (
+                Some(in_dns_a_negative(Id::from(2))),
+                Some(out_resolution_delay()),
+            ),
+            (
+                Some(in_dns_https_negative(Id::from(0))),
+                Some(expected_attempt),
+            ),
+        ],
+        now,
+    );
+}
+
+/// Send DNS queries, provide HTTPS positive + AAAA positive + A negative.
+/// For tests that need HTTPS service records (e.g. H3).
+pub fn dns_phase_aaaa_only_https_positive(
+    he: &mut HappyEyeballs,
+    now: Instant,
+    expected_attempt: Output,
+) {
+    he.expect(
+        vec![
+            (None, Some(out_send_dns_https(Id::from(0)))),
+            (None, Some(out_send_dns_aaaa(Id::from(1)))),
+            (None, Some(out_send_dns_a(Id::from(2)))),
+            (
+                Some(in_dns_aaaa_positive(Id::from(1))),
+                Some(out_resolution_delay()),
+            ),
+            (
+                Some(in_dns_a_negative(Id::from(2))),
+                Some(out_resolution_delay()),
+            ),
+            (
+                Some(in_dns_https_positive(Id::from(0))),
+                Some(expected_attempt),
+            ),
+        ],
+        now,
+    );
+}
+
+/// Send DNS queries, provide HTTPS negative + AAAA positive + A positive.
+/// Two endpoints available (v6 + v4), expects connection attempt delay after
+/// the first attempt.
+pub fn dns_phase_aaaa_and_a(
+    he: &mut HappyEyeballs,
+    now: Instant,
+    expected_attempt: Output,
+) {
+    he.expect(
+        vec![
+            (None, Some(out_send_dns_https(Id::from(0)))),
+            (None, Some(out_send_dns_aaaa(Id::from(1)))),
+            (None, Some(out_send_dns_a(Id::from(2)))),
+            (
+                Some(in_dns_aaaa_positive(Id::from(1))),
+                Some(out_resolution_delay()),
+            ),
+            (
+                Some(in_dns_a_positive(Id::from(2))),
+                Some(out_resolution_delay()),
+            ),
+            (
+                Some(in_dns_https_negative(Id::from(0))),
+                Some(expected_attempt),
+            ),
+            (None, Some(out_connection_attempt_delay())),
+        ],
+        now,
+    );
 }
 
 pub fn setup() -> (Instant, HappyEyeballs) {
