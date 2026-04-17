@@ -1,12 +1,12 @@
 use std::{
-    collections::HashSet,
+    collections::{HashSet, VecDeque},
     net::{Ipv4Addr, Ipv6Addr},
     time::Instant,
 };
 
 use happy_eyeballs::{
-    CONNECTION_ATTEMPT_DELAY, ConnectionResult, DnsResult, EchConfig, HappyEyeballs, HttpVersion,
-    Id, Input, IpPreference, NetworkConfig, Output, RESOLUTION_DELAY, ServiceInfo,
+    CONNECTION_ATTEMPT_DELAY, ConnectionResult, DnsResult, EchConfig, FailureReason, HappyEyeballs,
+    HttpVersion, Id, Input, IpPreference, NetworkConfig, Output, RESOLUTION_DELAY, ServiceInfo,
 };
 
 fn main() {
@@ -32,34 +32,27 @@ fn dns_https_negative(id: Id) -> Input {
     }
 }
 
-fn dns_https_ech(id: Id) -> Input {
+fn dns_https(id: Id, ipv6_hints: Vec<Ipv6Addr>, ech_config: Option<EchConfig>) -> Input {
     Input::DnsResult {
         id,
         result: DnsResult::Https(Ok(vec![ServiceInfo {
             priority: 1,
             target_name: HOSTNAME.into(),
             alpn_http_versions: HashSet::from([HttpVersion::H3, HttpVersion::H2]),
-            ipv6_hints: vec![V6_ADDR],
+            ipv6_hints,
             ipv4_hints: vec![],
-            ech_config: Some(EchConfig::new(vec![1, 2, 3, 4, 5])),
+            ech_config,
             port: None,
         }])),
     }
 }
 
-fn dns_https_many(id: Id) -> Input {
-    Input::DnsResult {
-        id,
-        result: DnsResult::Https(Ok(vec![ServiceInfo {
-            priority: 1,
-            target_name: HOSTNAME.into(),
-            alpn_http_versions: HashSet::from([HttpVersion::H3, HttpVersion::H2]),
-            ipv6_hints: vec![V6_ADDR, V6_ADDR_2, V6_ADDR_3],
-            ipv4_hints: vec![V4_ADDR, V4_ADDR_2],
-            ech_config: None,
-            port: None,
-        }])),
-    }
+fn dns_https_positive(id: Id) -> Input {
+    dns_https(id, vec![], None)
+}
+
+fn dns_https_ech(id: Id) -> Input {
+    dns_https(id, vec![V6_ADDR], Some(EchConfig::new(vec![1, 2, 3, 4, 5])))
 }
 
 fn dns_aaaa(id: Id, addrs: Result<Vec<Ipv6Addr>, ()>) -> Input {
@@ -91,11 +84,20 @@ fn conn_failure(id: Id) -> Input {
 }
 
 /// Drains all initial `SendDnsQuery` outputs from the state machine.
-///
-/// Consumes the first non-`SendDnsQuery` output (always `None` in the current
-/// state machine) to detect the end of the query sequence.
 fn drain_dns_queries(he: &mut HappyEyeballs, now: Instant) {
     while matches!(he.process_output(now), Some(Output::SendDnsQuery { .. })) {}
+}
+
+/// Feeds an HTTPS-negative result (id=0) and asserts the resulting resolution-delay timer.
+fn fail_https_query(he: &mut HappyEyeballs, now: Instant) {
+    he.process_input(dns_https_negative(id(0)), now);
+    let output = he.process_output(now);
+    assert_eq!(
+        output,
+        Some(Output::Timer {
+            duration: RESOLUTION_DELAY
+        })
+    );
 }
 
 fn setup() -> (Instant, HappyEyeballs) {
@@ -109,28 +111,6 @@ fn setup_with_config(config: NetworkConfig) -> (Instant, HappyEyeballs) {
     (now, he)
 }
 
-/// Feeds negative AAAA and A results, draining the resolution-delay timer after each.
-///
-/// Assumes default-config query ID assignment: HTTPS=0, AAAA=1, A=2.
-fn fail_address_queries(he: &mut HappyEyeballs, now: Instant) {
-    he.process_input(dns_aaaa(id(1), Err(())), now);
-    let output = he.process_output(now);
-    assert_eq!(
-        output,
-        Some(Output::Timer {
-            duration: RESOLUTION_DELAY
-        })
-    );
-    he.process_input(dns_a(id(2), Err(())), now);
-    let output = he.process_output(now);
-    assert_eq!(
-        output,
-        Some(Output::Timer {
-            duration: RESOLUTION_DELAY
-        })
-    );
-}
-
 /// Minimal path: IPv6-only config, single address, one connection attempt.
 ///
 /// Baseline for the per-iteration cost of the state machine.
@@ -142,19 +122,14 @@ fn simple_ipv6_only(bencher: divan::Bencher) {
             ..NetworkConfig::default()
         });
 
-        // HTTPS fails; state machine waits for preferred family (AAAA)
-        he.process_input(dns_https_negative(id(0)), now);
-        let output = he.process_output(now);
-        assert_eq!(output, Some(Output::Timer { duration: RESOLUTION_DELAY }));
+        fail_https_query(&mut he, now);
 
-        // AAAA resolves; connection attempt fires
         he.process_input(dns_aaaa(id(1), Ok(vec![V6_ADDR])), now);
         let output = he.process_output(now);
         assert!(matches!(output, Some(Output::AttemptConnection { id: attempt_id, .. }) if attempt_id == id(2)));
         let output = he.process_output(now);
         assert_eq!(output, Some(Output::Timer { duration: CONNECTION_ATTEMPT_DELAY }));
 
-        // Connection succeeds
         he.process_input(conn_success(id(2)), now);
         let output = he.process_output(now);
         assert_eq!(output, Some(Output::Succeeded));
@@ -172,17 +147,13 @@ fn dual_stack_racing(bencher: divan::Bencher) {
     bencher.bench_local(|| {
         let (mut now, mut he) = setup();
 
-        // HTTPS fails; state machine waits for preferred family (AAAA)
-        he.process_input(dns_https_negative(id(0)), now);
-        let output = he.process_output(now);
-        assert_eq!(output, Some(Output::Timer { duration: RESOLUTION_DELAY }));
+        fail_https_query(&mut he, now);
 
-        // AAAA resolves; v6 connection attempt fires without waiting for A
+        // v6 fires without waiting for A (move-on after preferred family + HTTPS done)
         he.process_input(dns_aaaa(id(1), Ok(vec![V6_ADDR])), now);
         let output = he.process_output(now);
         assert!(matches!(output, Some(Output::AttemptConnection { id: attempt_id, .. }) if attempt_id == id(3)));
 
-        // A resolves; connection attempt delay before v4
         he.process_input(dns_a(id(2), Ok(vec![V4_ADDR])), now);
         let output = he.process_output(now);
         assert_eq!(output, Some(Output::Timer { duration: CONNECTION_ATTEMPT_DELAY }));
@@ -193,7 +164,6 @@ fn dual_stack_racing(bencher: divan::Bencher) {
         let output = he.process_output(now);
         assert_eq!(output, Some(Output::Timer { duration: CONNECTION_ATTEMPT_DELAY }));
 
-        // IPv6 fails, IPv4 succeeds
         he.process_input(conn_failure(id(3)), now);
         he.process_input(conn_success(id(4)), now);
         let output = he.process_output(now);
@@ -207,20 +177,26 @@ fn dual_stack_racing(bencher: divan::Bencher) {
 ///
 /// Exercises ServiceInfo processing, ECH config propagation to endpoints,
 /// and HTTP version splitting in `endpoints_to_attempt_domain`.
+///
+/// HTTPS is fed while AAAA/A are still in-flight so the IPv6 hint remains
+/// valid (hints are discarded once the address queries complete).
 #[divan::bench]
 fn https_with_ech(bencher: divan::Bencher) {
     bencher.bench_local(|| {
-        let (now, mut he) = setup();
-        fail_address_queries(&mut he, now); // AAAA and A both fail; only HTTPS hints provide addresses
+        let (mut now, mut he) = setup();
 
-        // HTTPS arrives with ECH + H3+H2 ALPN + IPv6 hint
+        // Fed before AAAA/A complete so the hint remains valid
         he.process_input(dns_https_ech(id(0)), now);
+        let output = he.process_output(now);
+        assert_eq!(output, Some(Output::Timer { duration: RESOLUTION_DELAY }));
+
+        now += RESOLUTION_DELAY;
         let output = he.process_output(now);
         assert!(matches!(output, Some(Output::AttemptConnection { id: attempt_id, .. }) if attempt_id == id(3)));
         let output = he.process_output(now);
         assert_eq!(output, Some(Output::Timer { duration: CONNECTION_ATTEMPT_DELAY }));
 
-        // H3 attempt succeeds before H2 is started
+        // Succeeds before H2 attempt is started
         he.process_input(conn_success(id(3)), now);
         let output = he.process_output(now);
         assert_eq!(output, Some(Output::Succeeded));
@@ -229,33 +205,41 @@ fn https_with_ech(bencher: divan::Bencher) {
     });
 }
 
-/// HTTPS record with many endpoints: 3 IPv6 + 2 IPv4 hints, H3+H2 ALPN.
+/// Many endpoints: HTTPS with H3/H2 ALPN, 3 resolved IPv6 + 2 resolved IPv4 addresses.
 ///
-/// Exercises `endpoints_to_attempt_domain` with a larger endpoint set (up to
-/// 10 endpoints), cycling through all connection attempts until all fail.
+/// Exercises `endpoints_to_attempt_domain` with a larger endpoint set
+/// (3v6 + 2v4) × 2 HTTP versions = 10 endpoints, cycling through all
+/// connection attempts until all fail.
 #[divan::bench]
 fn many_endpoints(bencher: divan::Bencher) {
     bencher.bench_local(|| {
         let (mut now, mut he) = setup();
-        fail_address_queries(&mut he, now); // AAAA and A both fail; only HTTPS hints provide addresses
 
-        // HTTPS: 3 IPv6 hints + 2 IPv4 hints, H3+H2 ALPN = up to 10 endpoints
-        he.process_input(dns_https_many(id(0)), now);
+        // All DNS fed upfront so all addresses are available at once
+        he.process_input(dns_https_positive(id(0)), now);
+        he.process_input(
+            dns_aaaa(id(1), Ok(vec![V6_ADDR, V6_ADDR_2, V6_ADDR_3])),
+            now,
+        );
+        he.process_input(dns_a(id(2), Ok(vec![V4_ADDR, V4_ADDR_2])), now);
 
-        // Drive all connection attempts to failure
-        loop {
+        // Drive all connection attempts to failure, respecting the
+        // CONNECTION_ATTEMPT_DELAY between attempts as in real usage.
+        let mut in_flight = VecDeque::new();
+        let result = loop {
             match he.process_output(now) {
-                Some(Output::AttemptConnection { id, .. }) => {
-                    he.process_input(conn_failure(id), now);
+                Some(Output::AttemptConnection { id, .. }) => in_flight.push_back(id),
+                Some(Output::Timer { duration }) => {
+                    now += duration;
+                    if let Some(id) = in_flight.pop_front() {
+                        he.process_input(conn_failure(id), now);
+                    }
                 }
-                Some(Output::Timer { duration }) => now += duration,
                 Some(Output::CancelConnection { .. }) => {}
-                None
-                | Some(Output::Succeeded | Output::Failed(_) | Output::SendDnsQuery { .. }) => {
-                    break;
-                }
+                output => break output,
             }
-        }
+        };
+        assert_eq!(result, Some(Output::Failed(FailureReason::Connection)));
 
         divan::black_box(he)
     });

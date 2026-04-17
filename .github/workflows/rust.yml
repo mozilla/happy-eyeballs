@@ -62,7 +62,7 @@ jobs:
           tools: cargo-codspeed
           token: ${{ github.token }}
       - name: Build benchmarks
-        run: cargo codspeed build --bench happy_eyeballs
+        run: cargo codspeed build
       - name: Run benchmarks
         uses: CodSpeedHQ/action@db35df748deb45fdef0960669f57d627c1956c30 # v4.13.1
         with:
