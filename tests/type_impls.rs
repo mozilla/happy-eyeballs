@@ -1,7 +1,9 @@
 mod common;
 use common::*;
 
-use happy_eyeballs::{HappyEyeballs, HttpVersion, Id, ServiceInfo, TargetName};
+use happy_eyeballs::{
+    ConnectionResult, EchConfig, HttpVersion, Id, Input, ServiceInfo, TargetName,
+};
 
 #[test]
 fn id_roundtrip() {
@@ -68,17 +70,42 @@ fn happy_eyeballs_debug() {
     let s = format!("{he:?}");
     assert!(s.contains("dns_queries"), "missing 'dns_queries': {s}");
 
-    // IP host: first process_output immediately starts a connection.
-    let mut he_ip = HappyEyeballs::new(&format!("[{V6_ADDR}]"), PORT).unwrap();
-    let _ = he_ip.process_output(now);
-    let s = format!("{he_ip:?}");
+    // Set up a hostname-based HE with an HTTPS record that provides ECH
+    // config, so the connection attempt carries ECH and EchRetry is valid.
+    let (now2, mut he2) = setup();
+
+    // Drive through DNS queries, feed HTTPS+ECH and AAAA to get a connection
+    // attempt that carries ECH config.
+    he2.expect(
+        vec![
+            (None, Some(out_send_dns_https(Id::from(0)))),
+            (None, Some(out_send_dns_aaaa(Id::from(1)))),
+            (None, Some(out_send_dns_a(Id::from(2)))),
+            (
+                Some(in_dns_https_positive_ech(Id::from(0))),
+                Some(out_resolution_delay()),
+            ),
+        ],
+        now2,
+    );
+
+    // AAAA arrives; connection attempt with ECH is emitted.
+    he2.process_input(in_dns_aaaa_positive(Id::from(1)), now2);
+    let _ = he2.process_output(now2);
+    let s = format!("{he2:?}");
     assert!(
         s.contains("connection_attempts"),
         "missing 'connection_attempts': {s}"
     );
 
     // Feed EchRetry for the in-progress connection to populate ech_retries.
-    he_ip.process_input(in_connection_result_ech_retry(Id::from(0)), now);
-    let s = format!("{he_ip:?}");
+    he2.process_input(
+        Input::ConnectionResult {
+            id: Id::from(3),
+            result: ConnectionResult::EchRetry(EchConfig::new(vec![10, 20, 30])),
+        },
+        now2,
+    );
+    let s = format!("{he2:?}");
     assert!(s.contains("ech_retries"), "missing 'ech_retries': {s}");
 }
