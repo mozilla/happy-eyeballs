@@ -55,7 +55,7 @@ jobs:
 
   semver:
     if: github.event_name == 'pull_request'
-    uses: mozilla/actions/.github/workflows/semver.yml@25cb84d060946c0ad6d2c3f79da479b16d180d71 # v1.1.0
+    uses: mozilla/actions/.github/workflows/semver.yml@73612e8bbaf7c3053d8a97bb273c47a812017863 # v1.1.1
 
   mutants-pr:
     if: github.event_name == 'pull_request'
