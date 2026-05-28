@@ -51,7 +51,7 @@ jobs:
     uses: mozilla/actions/.github/workflows/deny.yml@27cbe8fb5d338c2861b787e5de10410559065db1 # v1.1.3
 
   machete:
-    uses: mozilla/actions/.github/workflows/machete.yml@27cbe8fb5d338c2861b787e5de10410559065db1 # v1.1.3
+    uses: mozilla/actions/.github/workflows/machete.yml@95b043d77461064eed6fbffa7b3f240bcbf19d3b # v1.1.5
 
   semver:
     if: github.event_name == 'pull_request'
