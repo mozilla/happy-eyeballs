@@ -48,10 +48,24 @@ jobs:
     uses: mozilla/actions/.github/workflows/clippy.yml@95b043d77461064eed6fbffa7b3f240bcbf19d3b # v1.1.5
 
   deny:
-    uses: mozilla/actions/.github/workflows/deny.yml@27cbe8fb5d338c2861b787e5de10410559065db1 # v1.1.3
+    uses: mozilla/actions/.github/workflows/deny.yml@95b043d77461064eed6fbffa7b3f240bcbf19d3b # v1.1.5
 
   machete:
     uses: mozilla/actions/.github/workflows/machete.yml@95b043d77461064eed6fbffa7b3f240bcbf19d3b # v1.1.5
+
+  rdme:
+    name: README in sync with crate docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - uses: mozilla/actions/rust@95b043d77461064eed6fbffa7b3f240bcbf19d3b # v1.1.5
+        with:
+          tools: cargo-rdme
+          token: ${{ github.token }}
+      - name: Check README is up to date
+        run: cargo rdme --check
 
   semver:
     name: Check semver
@@ -66,7 +80,7 @@ jobs:
 
   dependency-review:
     if: github.event_name == 'pull_request'
-    uses: mozilla/actions/.github/workflows/dependency-review.yml@312d300af3fb2b6551389bf1cb40b10e86294ec2 # v1.1.4
+    uses: mozilla/actions/.github/workflows/dependency-review.yml@95b043d77461064eed6fbffa7b3f240bcbf19d3b # v1.1.5
 
   actionlint:
     uses: mozilla/actions/.github/workflows/actionlint.yml@95b043d77461064eed6fbffa7b3f240bcbf19d3b # v1.1.5
