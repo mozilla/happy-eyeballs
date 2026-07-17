@@ -1022,9 +1022,12 @@ impl HappyEyeballs {
             return None;
         }
 
+        // Considers every query type, SVCB/HTTPS included, not just A and AAAA:
+        // the delay exists to receive the preferred addresses and the service
+        // information together. See draft-ietf-happy-happyeyeballs-v3-04:
+        // <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-04.html#section-4.2>
         self.dns_queries
             .iter()
-            // TODO: Currently considers all queries. Should we only consider A and AAAA?
             .filter_map(|q| match &q.state {
                 DnsQueryState::Completed { completed, .. } => Some(completed),
                 _ => None,
