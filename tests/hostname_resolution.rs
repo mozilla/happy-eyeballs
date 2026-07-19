@@ -322,6 +322,80 @@ fn https_v4_hints_move_on_with_timeout() {
     );
 }
 
+/// An HTTPS record with an IPv6 hint (advertising only HTTP/1.1) arrives
+/// first, so the hint should be connected to once the resolution delay expires
+/// (see `https_hints_move_on_with_timeout`). Then empty (NODATA) A and AAAA
+/// answers arrive at that same instant.
+///
+/// An empty answer means the name simply has no A/AAAA records, so it carries
+/// no address to replace the hint with. The operator-supplied hint is still the
+/// only address available and is used: an HTTP/1.1 connection attempt to the v6
+/// hint. (A negative answer, by contrast, still discards the hint, see
+/// `hints_discarded_on_negative_answer`.)
+///
+/// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2.1>
+#[test]
+fn empty_a_aaaa_at_resolution_delay_keeps_v6_hint() {
+    const RESOLUTION_DELAY_25MS: Duration = Duration::from_millis(25);
+    let (mut now, mut he) = setup_with_config(NetworkConfig {
+        resolution_delay: RESOLUTION_DELAY_25MS,
+        ..NetworkConfig::default()
+    });
+
+    expect_initial_dns_queries(&mut he, now);
+    he.input(in_dns_https_v6_hint_h1(Id::from(0)), now);
+    he.expect(
+        Output::Timer {
+            duration: RESOLUTION_DELAY_25MS,
+        },
+        now,
+    );
+
+    // The resolution delay expires and the empty A and AAAA answers arrive at
+    // that same instant.
+    now += RESOLUTION_DELAY_25MS;
+    he.input(in_dns_aaaa_empty(Id::from(1)), now);
+    he.input(in_dns_a_empty(Id::from(2)), now);
+
+    // The empty answers carry no addresses, so the v6 hint remains the only
+    // address available: expect an H1 connection attempt to it.
+    he.expect(
+        out_attempt(
+            Id::from(3),
+            V6_ADDR.into(),
+            PORT,
+            ConnectionAttemptHttpVersions::H1,
+        ),
+        now,
+    );
+}
+
+/// Mirror of `empty_a_aaaa_at_resolution_delay_keeps_v6_hint` with the opposite
+/// arrival order: the empty (NODATA) A and AAAA answers arrive first, then the
+/// HTTPS record with the IPv6 hint arrives right after. The empty answers still
+/// carry no addresses, so the hint is used: an H1 connection attempt to it.
+#[test]
+fn empty_a_aaaa_before_https_v6_hint_keeps_hint() {
+    let (now, mut he) = setup();
+
+    expect_initial_dns_queries(&mut he, now);
+    he.input(in_dns_aaaa_empty(Id::from(1)), now);
+    he.expect(out_resolution_delay(), now);
+    he.input(in_dns_a_empty(Id::from(2)), now);
+    he.expect(out_resolution_delay(), now);
+
+    he.input(in_dns_https_v6_hint_h1(Id::from(0)), now);
+    he.expect(
+        out_attempt(
+            Id::from(3),
+            V6_ADDR.into(),
+            PORT,
+            ConnectionAttemptHttpVersions::H1,
+        ),
+        now,
+    );
+}
+
 /// When the resolution delay has exactly elapsed, `process_output` returns `None`,
 /// not a zero-duration timer.
 #[test]
