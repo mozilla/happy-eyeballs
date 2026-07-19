@@ -299,12 +299,12 @@ impl ServiceInfo {
     fn flatten_into_endpoints(
         &self,
         port: u16,
-        // `None` if no A response has been received yet; `Some(addrs)` once
-        // an answer (positive or negative) has arrived.
-        ipv4_addrs: Option<&[Ipv4Addr]>,
-        // `None` if no AAAA response has been received yet; `Some(addrs)`
-        // once an answer (positive or negative) has arrived.
-        ipv6_addrs: Option<&[Ipv6Addr]>,
+        // `None` if no A response has arrived yet. `Some(Ok(addrs))` for a
+        // positive answer (`addrs` empty for a NODATA answer). `Some(Err(()))`
+        // for a negative answer.
+        ipv4_addrs: Option<Result<&[Ipv4Addr], ()>>,
+        // As `ipv4_addrs`, but for the AAAA query.
+        ipv6_addrs: Option<Result<&[Ipv6Addr], ()>>,
         // The HTTP versions the client allows; used to filter this record's own
         // ALPNs.
         enabled_http_versions: &HttpVersions,
@@ -320,16 +320,18 @@ impl ServiceInfo {
         //
         // <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2.1>
         //
-        // Once an answer arrives — positive or negative — the records are no
-        // longer "not available yet". A positive answer replaces hints with
-        // actual addresses; a negative answer discards them entirely.
-        let hint_v6 = match ipv6_addrs {
-            None => self.ipv6_hints.as_slice(),
-            Some(_) => &[],
+        // A hint applies while the family's records are "not available yet". A
+        // non-empty positive answer replaces the hint with the actual
+        // addresses, and a negative answer discards it. An empty (NODATA)
+        // positive answer carries no address to replace the hint with, so the
+        // hint is kept.
+        let hint_v6: &[Ipv6Addr] = match ipv6_addrs {
+            None | Some(Ok([])) => self.ipv6_hints.as_slice(),
+            Some(Ok(_)) | Some(Err(())) => &[],
         };
-        let hint_v4 = match ipv4_addrs {
-            None => self.ipv4_hints.as_slice(),
-            Some(_) => &[],
+        let hint_v4: &[Ipv4Addr] = match ipv4_addrs {
+            None | Some(Ok([])) => self.ipv4_hints.as_slice(),
+            Some(Ok(_)) | Some(Err(())) => &[],
         };
 
         // Each ServiceMode record's ALPN SvcParam lists the protocols available
@@ -362,11 +364,19 @@ impl ServiceInfo {
             });
 
         let addrs = ipv6_addrs
+            .and_then(Result::ok)
             .unwrap_or(&[])
             .iter()
             .cloned()
             .map(IpAddr::V6)
-            .chain(ipv4_addrs.unwrap_or(&[]).iter().cloned().map(IpAddr::V4))
+            .chain(
+                ipv4_addrs
+                    .and_then(Result::ok)
+                    .unwrap_or(&[])
+                    .iter()
+                    .cloned()
+                    .map(IpAddr::V4),
+            )
             .flat_map(|ip| {
                 // TODO: way around allocation?
                 let ech_config = ech_enabled.then(|| self.ech_config.clone()).flatten();
@@ -1389,23 +1399,23 @@ impl HappyEyeballs {
 
         let mut endpoints: Vec<Endpoint> = Vec::new();
         for info in &service_infos {
-            let ipv4_addrs: Option<&[Ipv4Addr]> =
+            let ipv4_addrs: Option<Result<&[Ipv4Addr], ()>> =
                 self.dns_queries.iter().find_map(|q| match &q.state {
                     DnsQueryState::Completed {
                         response: DnsResult::A(result),
                         ..
                     } if q.target_name == info.target_name => {
-                        Some(result.as_deref().unwrap_or_default())
+                        Some(result.as_deref().map_err(|_| ()))
                     }
                     _ => None,
                 });
-            let ipv6_addrs: Option<&[Ipv6Addr]> =
+            let ipv6_addrs: Option<Result<&[Ipv6Addr], ()>> =
                 self.dns_queries.iter().find_map(|q| match &q.state {
                     DnsQueryState::Completed {
                         response: DnsResult::Aaaa(result),
                         ..
                     } if q.target_name == info.target_name => {
-                        Some(result.as_deref().unwrap_or_default())
+                        Some(result.as_deref().map_err(|_| ()))
                     }
                     _ => None,
                 });
