@@ -29,8 +29,9 @@
 //! # let mut dns_id: Option<Id> = None;
 //! while let Some(output) = he.process_output(now) {
 //!     match output {
-//!         Output::SendDnsQuery { id, hostname, record_type } => {
-//!             // Send DNS query.
+//!         Output::SendDnsQuery { id, hostname, record_type, allow_stale } => {
+//!             // Send DNS query. `allow_stale` says whether the resolver may
+//!             // answer from an expired cache entry (Optimistic DNS).
 //! #           dns_id = Some(id);
 //!         }
 //!         Output::AttemptConnection { id, endpoint, is_ech_retry } => {
@@ -43,7 +44,7 @@
 //! // Later pass results as input back to the state machine, e.g. a DNS
 //! // response arrives:
 //! # let dns_result = DnsResult::Aaaa(Ok(vec![Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 1)]));
-//! he.process_input(Input::DnsResult { id: dns_id.unwrap(), result: dns_result }, Instant::now());
+//! he.process_input(Input::DnsResult { id: dns_id.unwrap(), result: dns_result, stale: false }, Instant::now());
 //! ```
 //!
 //! For complete example usage, see the [`tests/`](tests/).
@@ -81,8 +82,20 @@ pub const CONNECTION_ATTEMPT_DELAY_MULTIPLIER: NonZeroU32 = NonZeroU32::MIN;
 /// Input events to the Happy Eyeballs state machine
 #[derive(Debug, Clone, PartialEq)]
 pub enum Input {
-    /// DNS query result received
-    DnsResult { id: Id, result: DnsResult },
+    /// DNS query result received.
+    ///
+    /// `stale` is `true` when the resolver answered from an expired (stale)
+    /// cache entry, which it may do only for a query that allowed it
+    /// (`allow_stale` on [`Output::SendDnsQuery`]). The state machine uses a
+    /// stale answer at once and emits a background query to revalidate it, per
+    /// [Optimistic DNS].
+    ///
+    /// [Optimistic DNS]: https://datatracker.ietf.org/doc/draft-gakiwate-dnsop-optimistic-dns/
+    DnsResult {
+        id: Id,
+        result: DnsResult,
+        stale: bool,
+    },
 
     /// Connection attempt result
     ConnectionResult { id: Id, result: ConnectionResult },
@@ -198,11 +211,21 @@ impl Debug for TargetName {
 #[derive(Debug, Clone, PartialEq)]
 #[must_use]
 pub enum Output {
-    /// Send a DNS query
+    /// Send a DNS query.
+    ///
+    /// `allow_stale` tells the resolver whether it may answer from an expired
+    /// (stale) cache entry. It is `true` for a record's first query, so the
+    /// resolver can return an optimistic answer without waiting for the
+    /// network, and `false` for the follow-up query that revalidates a stale
+    /// answer, which must come from a fresh network lookup. See [Optimistic
+    /// DNS].
+    ///
+    /// [Optimistic DNS]: https://datatracker.ietf.org/doc/draft-gakiwate-dnsop-optimistic-dns/
     SendDnsQuery {
         id: Id,
         hostname: TargetName,
         record_type: DnsRecordType,
+        allow_stale: bool,
     },
 
     /// Start a timer
@@ -437,6 +460,8 @@ struct DnsQuery {
     target_name: TargetName,
     record_type: DnsRecordType,
     state: DnsQueryState,
+    /// Optimistic-DNS revalidation of a stale answer for this record.
+    refresh: Refresh,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -445,7 +470,22 @@ enum DnsQueryState {
     Completed {
         completed: Instant,
         response: DnsResult,
+        /// Whether the resolver served this answer from a stale cache entry.
+        stale: bool,
     },
+}
+
+/// Tracks the background query that revalidates a stale answer, per Optimistic
+/// DNS. A stale answer is revalidated at most once.
+#[derive(Debug, Clone, PartialEq)]
+enum Refresh {
+    /// No revalidation is in flight: the answer is fresh, or a stale answer has
+    /// not been revalidated yet.
+    Idle,
+    /// A revalidation query is in flight, carrying this id.
+    InFlight(Id),
+    /// A stale answer has been revalidated.
+    Done,
 }
 
 impl DnsQuery {
@@ -902,8 +942,8 @@ impl HappyEyeballs {
         trace!("target={} input={:?}", self.host, input);
 
         match input {
-            Input::DnsResult { id, result } => {
-                self.on_dns_response(id, result, now);
+            Input::DnsResult { id, result, stale } => {
+                self.on_dns_response(id, result, stale, now);
             }
             Input::ConnectionResult { id, result } => {
                 self.on_connection_result(id, result);
@@ -946,6 +986,10 @@ impl HappyEyeballs {
         }
 
         if let Some(o) = self.send_dns_request_for_alt_svc() {
+            return Some(o);
+        }
+
+        if let Some(o) = self.send_dns_refresh() {
             return Some(o);
         }
 
@@ -1068,11 +1112,13 @@ impl HappyEyeballs {
                     target_name: target_name.clone(),
                     record_type,
                     state: DnsQueryState::InProgress,
+                    refresh: Refresh::Idle,
                 });
                 return Some(Output::SendDnsQuery {
                     id,
                     hostname: target_name,
                     record_type,
+                    allow_stale: true,
                 });
             }
         }
@@ -1116,11 +1162,13 @@ impl HappyEyeballs {
             target_name: target_name.clone(),
             record_type,
             state: DnsQueryState::InProgress,
+            refresh: Refresh::Idle,
         });
         Some(Output::SendDnsQuery {
             id,
             hostname: target_name,
             record_type,
+            allow_stale: true,
         })
     }
 
@@ -1156,15 +1204,64 @@ impl HappyEyeballs {
             target_name: target_name.clone(),
             record_type,
             state: DnsQueryState::InProgress,
+            refresh: Refresh::Idle,
         });
         Some(Output::SendDnsQuery {
             id,
             hostname: target_name,
             record_type,
+            allow_stale: true,
         })
     }
 
-    fn on_dns_response(&mut self, id: Id, response: DnsResult, now: Instant) {
+    /// Emit a background query to revalidate an answer the resolver served from
+    /// a stale cache entry, per [Optimistic DNS].
+    ///
+    /// The state machine has already used the stale answer to race connections;
+    /// this query forbids a stale answer (`allow_stale: false`) so the resolver
+    /// performs a fresh network lookup. When the fresh answer arrives it
+    /// replaces the stale one. Each stale answer is revalidated at most once.
+    ///
+    /// [Optimistic DNS]: https://datatracker.ietf.org/doc/draft-gakiwate-dnsop-optimistic-dns/
+    fn send_dns_refresh(&mut self) -> Option<Output> {
+        let idx = self.dns_queries.iter().position(|q| {
+            q.refresh == Refresh::Idle
+                && matches!(q.state, DnsQueryState::Completed { stale: true, .. })
+        })?;
+        let id = self.id_generator.next_id();
+        let query = &mut self.dns_queries[idx];
+        query.refresh = Refresh::InFlight(id);
+        Some(Output::SendDnsQuery {
+            id,
+            hostname: query.target_name.clone(),
+            record_type: query.record_type,
+            allow_stale: false,
+        })
+    }
+
+    fn on_dns_response(&mut self, id: Id, response: DnsResult, stale: bool, now: Instant) {
+        // A revalidation response replaces the stale answer of the query it
+        // belongs to, rather than opening a new record.
+        if let Some(query) = self
+            .dns_queries
+            .iter_mut()
+            .find(|q| q.refresh == Refresh::InFlight(id))
+        {
+            // A refresh query is sent with `allow_stale: false`, so the resolver
+            // must not answer it from a stale cache entry.
+            debug_assert!(
+                !stale,
+                "got a stale response for refresh query {id:?}, which forbade stale answers"
+            );
+            query.refresh = Refresh::Done;
+            query.state = DnsQueryState::Completed {
+                completed: now,
+                response,
+                stale,
+            };
+            return;
+        }
+
         let Some(query) = self.dns_queries.iter_mut().find(|q| q.id == id) else {
             debug_assert!(false, "got {response:?} for unknown id {id:?}");
             return;
@@ -1178,6 +1275,7 @@ impl HappyEyeballs {
         query.state = DnsQueryState::Completed {
             completed: now,
             response,
+            stale,
         };
     }
 
@@ -1431,6 +1529,12 @@ impl HappyEyeballs {
     fn failed(&self) -> Option<FailureReason> {
         if self.has_successful_connection()
             || self.dns_queries.iter().any(|q| !q.is_completed())
+            // A revalidation of a stale answer is still outstanding: its fresh
+            // answer may yet yield a usable address, so do not fail yet.
+            || self
+                .dns_queries
+                .iter()
+                .any(|q| matches!(q.refresh, Refresh::InFlight(_)))
             || self
                 .connection_attempts
                 .iter()

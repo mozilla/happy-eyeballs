@@ -27,6 +27,7 @@ fn ech_config_propagated_to_endpoint() {
                     .ipv6_hints(vec![V6_ADDR])
                     .ech(),
             ])),
+            stale: false,
         },
         now,
     );
@@ -113,6 +114,7 @@ fn hints_discarded_on_negative_answer() {
                         .ipv6_hints(case.ipv6_hints)
                         .ipv4_hints(case.ipv4_hints),
                 ])),
+                stale: false,
             },
             now,
         );
@@ -153,6 +155,7 @@ fn ech_disabled() {
                     .ipv6_hints(vec![V6_ADDR])
                     .ech(),
             ])),
+            stale: false,
         },
         now,
     );
@@ -196,6 +199,7 @@ fn ech_config_from_https_applies_to_aaaa() {
             result: DnsResult::Https(Ok(vec![
                 service_info(1, HOSTNAME, &[HttpVersion::H3, HttpVersion::H2]).ech(),
             ])),
+            stale: false,
         },
         now,
     );
@@ -274,6 +278,7 @@ fn partial_ech_two_service_infos() {
                     .port(SVC1_PORT),
                 service_info(2, SVC2, &[HttpVersion::H2]).port(SVC2_PORT),
             ])),
+            stale: false,
         },
         now,
     );
@@ -293,6 +298,7 @@ fn partial_ech_two_service_infos() {
         Input::DnsResult {
             id: Id::from(4),
             result: DnsResult::A(Ok(vec![V4_ADDR_2])),
+            stale: false,
         },
         now,
     );
@@ -348,6 +354,7 @@ fn both_service_infos_have_ech_no_origin_fallback() {
                     .ech()
                     .port(SVC2_PORT),
             ])),
+            stale: false,
         },
         now,
     );
@@ -366,6 +373,7 @@ fn both_service_infos_have_ech_no_origin_fallback() {
         Input::DnsResult {
             id: Id::from(4),
             result: DnsResult::A(Ok(vec![V4_ADDR_2])),
+            stale: false,
         },
         now,
     );
@@ -390,6 +398,7 @@ fn both_service_infos_have_ech_no_origin_fallback() {
         Input::DnsResult {
             id: Id::from(6),
             result: DnsResult::A(Ok(vec![V4_ADDR])),
+            stale: false,
         },
         now,
     );
@@ -445,6 +454,7 @@ fn per_record_alpn_not_unioned_across_records() {
                 service_info(1, SVC1, &[HttpVersion::H3]),
                 service_info(2, SVC2, &[HttpVersion::H2]),
             ])),
+            stale: false,
         },
         now,
     );
@@ -454,6 +464,7 @@ fn per_record_alpn_not_unioned_across_records() {
         Input::DnsResult {
             id: Id::from(3),
             result: DnsResult::Aaaa(Ok(vec![V6_ADDR_2])),
+            stale: false,
         },
         now,
     );
@@ -470,6 +481,7 @@ fn per_record_alpn_not_unioned_across_records() {
         Input::DnsResult {
             id: Id::from(4),
             result: DnsResult::A(Err(())),
+            stale: false,
         },
         now,
     );
@@ -478,6 +490,7 @@ fn per_record_alpn_not_unioned_across_records() {
         Input::DnsResult {
             id: Id::from(5),
             result: DnsResult::Aaaa(Ok(vec![V6_ADDR_3])),
+            stale: false,
         },
         now,
     );
@@ -486,6 +499,7 @@ fn per_record_alpn_not_unioned_across_records() {
         Input::DnsResult {
             id: Id::from(6),
             result: DnsResult::A(Err(())),
+            stale: false,
         },
         now,
     );
@@ -542,6 +556,7 @@ fn record_without_alpn_contributes_no_endpoints() {
                 service_info(1, SVC1, &[HttpVersion::H3]),
                 service_info(2, SVC2, &[]),
             ])),
+            stale: false,
         },
         now,
     );
@@ -551,6 +566,7 @@ fn record_without_alpn_contributes_no_endpoints() {
         Input::DnsResult {
             id: Id::from(3),
             result: DnsResult::Aaaa(Ok(vec![V6_ADDR_2])),
+            stale: false,
         },
         now,
     );
@@ -567,6 +583,7 @@ fn record_without_alpn_contributes_no_endpoints() {
         Input::DnsResult {
             id: Id::from(4),
             result: DnsResult::A(Err(())),
+            stale: false,
         },
         now,
     );
@@ -575,6 +592,7 @@ fn record_without_alpn_contributes_no_endpoints() {
         Input::DnsResult {
             id: Id::from(5),
             result: DnsResult::Aaaa(Ok(vec![V6_ADDR_3])),
+            stale: false,
         },
         now,
     );
@@ -583,6 +601,7 @@ fn record_without_alpn_contributes_no_endpoints() {
         Input::DnsResult {
             id: Id::from(6),
             result: DnsResult::A(Err(())),
+            stale: false,
         },
         now,
     );
@@ -639,6 +658,7 @@ fn partial_ech_with_alt_svc() {
                     .port(SVC1_PORT),
                 service_info(2, SVC2, &[HttpVersion::H2]).port(SVC2_PORT),
             ])),
+            stale: false,
         },
         now,
     );
@@ -657,6 +677,7 @@ fn partial_ech_with_alt_svc() {
         Input::DnsResult {
             id: Id::from(4),
             result: DnsResult::A(Ok(vec![V4_ADDR_2])),
+            stale: false,
         },
         now,
     );
@@ -698,6 +719,7 @@ mod https_port_svcparam_overrides_port_for {
                         .ipv4_hints(ipv4_hints)
                         .port(CUSTOM_PORT),
                 ])),
+                stale: false,
             },
             now,
         );
@@ -732,6 +754,7 @@ fn https_port_svcparam_applies_to_resolved_a_and_aaaa() {
             result: DnsResult::Https(Ok(vec![
                 service_info(1, HOSTNAME, &[HttpVersion::H3, HttpVersion::H2]).port(CUSTOM_PORT),
             ])),
+            stale: false,
         },
         now,
     );
@@ -758,6 +781,7 @@ fn https_port_svcparam_applies_but_fallbacks_follow() {
             result: DnsResult::Https(Ok(vec![
                 service_info(1, HOSTNAME, &[HttpVersion::H3, HttpVersion::H2]).port(CUSTOM_PORT),
             ])),
+            stale: false,
         },
         now,
     );
@@ -834,6 +858,7 @@ fn https_two_service_infos_with_different_ports() {
                 service_info(1, HOSTNAME, &[HttpVersion::H3, HttpVersion::H2]).port(PORT_1),
                 service_info(2, HOSTNAME, &[HttpVersion::H3, HttpVersion::H2]).port(PORT_2),
             ])),
+            stale: false,
         },
         now,
     );
@@ -913,6 +938,7 @@ fn https_svc1_addresses_trigger_additional_attempts() {
                 service_info(1, HOSTNAME, &[HttpVersion::H2, HttpVersion::H3]),
                 service_info(2, SVC1, &[HttpVersion::H2, HttpVersion::H3]),
             ])),
+            stale: false,
         },
         now,
     );
@@ -925,6 +951,7 @@ fn https_svc1_addresses_trigger_additional_attempts() {
         Input::DnsResult {
             id: Id::from(3),
             result: DnsResult::Aaaa(Ok(vec![V6_ADDR_2])),
+            stale: false,
         },
         now,
     );
@@ -933,6 +960,7 @@ fn https_svc1_addresses_trigger_additional_attempts() {
         Input::DnsResult {
             id: Id::from(4),
             result: DnsResult::A(Ok(vec![V4_ADDR_2])),
+            stale: false,
         },
         now,
     );
@@ -1000,6 +1028,7 @@ fn https_port_takes_precedence_over_alt_svc_port() {
             result: DnsResult::Https(Ok(vec![
                 service_info(1, HOSTNAME, &[HttpVersion::H3, HttpVersion::H2]).port(HTTPS_PORT),
             ])),
+            stale: false,
         },
         now,
     );
@@ -1097,6 +1126,7 @@ fn target_name_redirect_addresses_used_in_connection_attempts() {
         Input::DnsResult {
             id: Id::from(0),
             result: DnsResult::Https(Ok(vec![service_info(1, SVC1, &[HttpVersion::H3])])),
+            stale: false,
         },
         now,
     );
@@ -1108,6 +1138,7 @@ fn target_name_redirect_addresses_used_in_connection_attempts() {
         Input::DnsResult {
             id: Id::from(3),
             result: DnsResult::Aaaa(Ok(vec![V6_ADDR_2])),
+            stale: false,
         },
         now,
     );
@@ -1129,6 +1160,7 @@ fn target_name_redirect_addresses_used_in_connection_attempts() {
         Input::DnsResult {
             id: Id::from(4),
             result: DnsResult::A(Ok(vec![V4_ADDR_2])),
+            stale: false,
         },
         now,
     );
@@ -1185,6 +1217,7 @@ fn https_fallback_uses_default_http_versions() {
             result: DnsResult::Https(Ok(vec![
                 service_info(1, HOSTNAME, &[HttpVersion::H3]).port(CUSTOM_PORT),
             ])),
+            stale: false,
         },
         now,
     );
@@ -1221,6 +1254,7 @@ fn ech_retry_same_endpoint() {
             result: DnsResult::Https(Ok(vec![
                 service_info(1, HOSTNAME, &[HttpVersion::H2]).ech(),
             ])),
+            stale: false,
         },
         now,
     );
@@ -1282,6 +1316,7 @@ fn ech_retry_without_ech_sets_flag() {
             result: DnsResult::Https(Ok(vec![
                 service_info(1, HOSTNAME, &[HttpVersion::H2]).ech(),
             ])),
+            stale: false,
         },
         now,
     );
@@ -1342,6 +1377,7 @@ fn ech_retry_no_infinite_loop() {
             result: DnsResult::Https(Ok(vec![
                 service_info(1, HOSTNAME, &[HttpVersion::H2]).ech(),
             ])),
+            stale: false,
         },
         now,
     );
@@ -1451,6 +1487,7 @@ fn rfc_multi_cdn_target_names_resolved_and_attempted() {
                 service_info(1, H3POOL, &[HttpVersion::H3]),
                 service_info(2, CDN1, &[HttpVersion::H2]),
             ])),
+            stale: false,
         },
         now,
     );
@@ -1471,6 +1508,7 @@ fn rfc_multi_cdn_target_names_resolved_and_attempted() {
         Input::DnsResult {
             id: Id::from(3),
             result: DnsResult::Aaaa(Ok(vec![H3POOL_V6])),
+            stale: false,
         },
         now,
     );
@@ -1487,6 +1525,7 @@ fn rfc_multi_cdn_target_names_resolved_and_attempted() {
         Input::DnsResult {
             id: Id::from(4),
             result: DnsResult::A(Ok(vec![H3POOL_V4])),
+            stale: false,
         },
         now,
     );
@@ -1495,6 +1534,7 @@ fn rfc_multi_cdn_target_names_resolved_and_attempted() {
         Input::DnsResult {
             id: Id::from(5),
             result: DnsResult::Aaaa(Ok(vec![CDN1_V6])),
+            stale: false,
         },
         now,
     );
@@ -1503,6 +1543,7 @@ fn rfc_multi_cdn_target_names_resolved_and_attempted() {
         Input::DnsResult {
             id: Id::from(6),
             result: DnsResult::A(Ok(vec![CDN1_V4])),
+            stale: false,
         },
         now,
     );
