@@ -177,6 +177,17 @@ pub fn in_dns_https_positive_v6_hints(id: Id) -> Input {
     in_dns_https_with_hints(id, vec![], vec![V6_ADDR])
 }
 
+/// HTTPS record for the origin advertising only HTTP/1.1 (the "https" scheme
+/// default ALPN) with a single IPv6 address hint.
+pub fn in_dns_https_v6_hint_h1(id: Id) -> Input {
+    Input::DnsResult {
+        id,
+        result: DnsResult::Https(Ok(vec![
+            service_info(1, HOSTNAME, &[HttpVersion::H1]).ipv6_hints(vec![V6_ADDR]),
+        ])),
+    }
+}
+
 pub fn in_dns_https_positive_v4_hints(id: Id) -> Input {
     in_dns_https_with_hints(id, vec![V4_ADDR], vec![])
 }
@@ -256,6 +267,24 @@ pub fn in_dns_aaaa_negative(id: Id) -> Input {
         id,
         result: DnsResult::Aaaa(Err(())),
         stale: false,
+    }
+}
+
+/// A positive but empty AAAA answer (`Ok(vec![])`): the resolver returned no
+/// IPv6 addresses. Distinct from a negative answer (`Err`).
+pub fn in_dns_aaaa_empty(id: Id) -> Input {
+    Input::DnsResult {
+        id,
+        result: DnsResult::Aaaa(Ok(vec![])),
+    }
+}
+
+/// A positive but empty A answer (`Ok(vec![])`): the resolver returned no IPv4
+/// addresses. Distinct from a negative answer (`Err`).
+pub fn in_dns_a_empty(id: Id) -> Input {
+    Input::DnsResult {
+        id,
+        result: DnsResult::A(Ok(vec![])),
     }
 }
 
