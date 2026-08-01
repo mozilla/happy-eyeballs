@@ -185,6 +185,7 @@ pub fn in_dns_https_v6_hint_h1(id: Id) -> Input {
         result: DnsResult::Https(Ok(vec![
             service_info(1, HOSTNAME, &[HttpVersion::H1]).ipv6_hints(vec![V6_ADDR]),
         ])),
+        stale: false,
     }
 }
 
@@ -276,6 +277,7 @@ pub fn in_dns_aaaa_empty(id: Id) -> Input {
     Input::DnsResult {
         id,
         result: DnsResult::Aaaa(Ok(vec![])),
+        stale: false,
     }
 }
 
@@ -285,6 +287,7 @@ pub fn in_dns_a_empty(id: Id) -> Input {
     Input::DnsResult {
         id,
         result: DnsResult::A(Ok(vec![])),
+        stale: false,
     }
 }
 
