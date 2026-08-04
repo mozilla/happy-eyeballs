@@ -343,19 +343,26 @@ impl ServiceInfo {
         //
         // <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2.1>
         //
-        // A hint applies while the family's records are "not available yet". A
-        // non-empty positive answer replaces the hint with the actual
-        // addresses, and a negative answer discards it. An empty (NODATA)
-        // positive answer carries no address to replace the hint with, so the
-        // hint is kept.
-        let hint_v6: &[Ipv6Addr] = match ipv6_addrs {
-            None | Some(Ok([])) => self.ipv6_hints.as_slice(),
-            Some(Ok(_)) | Some(Err(())) => &[],
-        };
-        let hint_v4: &[Ipv4Addr] = match ipv4_addrs {
-            None | Some(Ok([])) => self.ipv4_hints.as_slice(),
-            Some(Ok(_)) | Some(Err(())) => &[],
-        };
+        // The hint is a last-resort fallback the operator put in the SVCB/HTTPS
+        // record. The resolved A/AAAA addresses, when present, are tried first
+        // (see the ordering below), but the hint is always kept and tried after
+        // them; an empty (NODATA) or a negative A/AAAA answer removes no address,
+        // so it does not remove the hint either.
+        //
+        // This is a deliberate deviation from RFC 9460 Section 7.3:
+        //
+        // > If A and AAAA records for TargetName are locally available, the
+        // > client SHOULD ignore these hints.
+        //
+        // That is a SHOULD, not a MUST, and its stated reason is that relying on
+        // the hints can interfere with load balancing and geo-aware selection.
+        // We keep that concern satisfied by trying the resolved addresses first
+        // and only falling back to the hint when they fail: the hint is an extra
+        // chance to connect, never a substitute for the authoritative records.
+        //
+        // <https://www.rfc-editor.org/rfc/rfc9460#section-7.3>
+        let hint_v6: &[Ipv6Addr] = self.ipv6_hints.as_slice();
+        let hint_v4: &[Ipv4Addr] = self.ipv4_hints.as_slice();
 
         // Each ServiceMode record's ALPN SvcParam lists the protocols available
         // at its own TargetName, so use only this record's ALPNs, never another
@@ -410,7 +417,8 @@ impl ServiceInfo {
                 })
             });
 
-        hints.chain(addrs).collect()
+        // Real addresses first, hints after them as a fallback.
+        addrs.chain(hints).collect()
     }
 }
 
