@@ -1261,13 +1261,16 @@ impl HappyEyeballs {
     }
 
     fn on_dns_response(&mut self, id: Id, response: DnsResult, stale: bool, now: Instant) {
-        // Latch on the first HTTPS answer that advertises ECH. A later answer may
-        // drop ECH (an Optimistic-DNS revalidation that fails or is forged), but
-        // the client has already learned the origin deploys ECH and must not be
-        // downgraded to a plaintext, SNI-leaking attempt.
-        if let DnsResult::Https(Ok(infos)) = &response {
-            self.ech_committed |= infos.iter().any(|i| i.ech_config.is_some());
-        }
+        // Latch on an accepted HTTPS answer that advertises ECH. A later answer
+        // may drop ECH (an Optimistic-DNS revalidation that fails or is forged),
+        // but the client has already learned the origin deploys ECH and must not
+        // be downgraded to a plaintext, SNI-leaking attempt. Only answers that
+        // are actually stored below set the latch, so an unknown or duplicate id
+        // (rejected below) cannot suppress the plaintext fallback.
+        let has_ech = matches!(
+            &response,
+            DnsResult::Https(Ok(infos)) if infos.iter().any(|i| i.ech_config.is_some())
+        );
 
         // A revalidation response replaces the stale answer of the query it
         // belongs to, rather than opening a new record.
@@ -1288,6 +1291,7 @@ impl HappyEyeballs {
                 response,
                 stale,
             };
+            self.ech_committed |= has_ech;
             return;
         }
 
@@ -1306,6 +1310,7 @@ impl HappyEyeballs {
             response,
             stale,
         };
+        self.ech_committed |= has_ech;
     }
 
     fn on_connection_result(&mut self, id: Id, result: ConnectionResult) {
