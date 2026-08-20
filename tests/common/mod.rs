@@ -227,6 +227,17 @@ pub fn in_dns_https_stale_v6_hints(id: Id) -> Input {
     }
 }
 
+/// An HTTPS answer advertising ECH, served from a stale (expired) cache entry.
+pub fn in_dns_https_stale_ech(id: Id) -> Input {
+    Input::DnsResult {
+        id,
+        result: DnsResult::Https(Ok(vec![
+            service_info(1, HOSTNAME, &[HttpVersion::H3, HttpVersion::H2]).ech(),
+        ])),
+        stale: true,
+    }
+}
+
 pub fn in_dns_aaaa_positive(id: Id) -> Input {
     Input::DnsResult {
         id,

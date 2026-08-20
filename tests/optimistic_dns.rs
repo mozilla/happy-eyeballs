@@ -6,10 +6,11 @@
 mod common;
 use common::*;
 
+use std::net::SocketAddr;
 use std::time::Instant;
 
 use happy_eyeballs::{
-    CONNECTION_ATTEMPT_DELAY, ConnectionAttemptHttpVersions, DnsRecordType, DnsResult,
+    CONNECTION_ATTEMPT_DELAY, ConnectionAttemptHttpVersions, DnsRecordType, DnsResult, Endpoint,
     FailureReason, HappyEyeballs, Id, Input, IpPreference, NetworkConfig, Output,
 };
 
@@ -411,6 +412,54 @@ fn failure_reported_after_refresh_also_fails() {
     // endpoint to try, so the state machine now reports the failure.
     he.input(in_dns_aaaa_positive(Id::from(4)), now);
     he.expect(Output::Failed(FailureReason::Connection), now);
+}
+
+/// A stale HTTPS answer that advertises ECH commits the client to ECH, which
+/// suppresses the plaintext (non-ECH) origin fallback that would leak the SNI.
+/// A revalidation that drops ECH (a failed or forged lookup) must not undo that
+/// commitment and re-enable the plaintext attempt.
+#[test]
+fn refresh_dropping_ech_keeps_plaintext_fallback_suppressed() {
+    let (mut now, mut he) = setup();
+    expect_initial_dns_queries(&mut he, now);
+
+    he.input(in_dns_https_stale_ech(Id::from(0)), now);
+    he.input(in_dns_aaaa_positive(Id::from(1)), now);
+    he.input(in_dns_a_negative(Id::from(2)), now);
+
+    // The committed attempt carries ECH, and the stale record is revalidated.
+    he.expect(
+        Output::AttemptConnection {
+            id: Id::from(3),
+            endpoint: Endpoint {
+                address: SocketAddr::new(V6_ADDR.into(), PORT),
+                http_version: ConnectionAttemptHttpVersions::H3,
+                ech_config: Some(ech_config()),
+            },
+            is_ech_retry: false,
+        },
+        now,
+    );
+    he.expect(
+        out_send_dns_refresh(Id::from(4), HOSTNAME, DnsRecordType::Https),
+        now,
+    );
+    he.expect(out_connection_attempt_delay(), now);
+
+    // The revalidation of the HTTPS record fails, dropping the ECH config.
+    he.input(
+        Input::DnsResult {
+            id: Id::from(4),
+            result: DnsResult::Https(Err(())),
+            stale: false,
+        },
+        now,
+    );
+
+    // Past the connection-attempt delay, no plaintext fallback is emitted; only
+    // the in-flight ECH attempt remains.
+    now += CONNECTION_ATTEMPT_DELAY;
+    he.expect_idle(now);
 }
 
 /// A revalidation that returns a negative answer removes the candidate; with the

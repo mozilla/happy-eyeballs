@@ -867,6 +867,10 @@ pub struct HappyEyeballs {
     /// ECH retries received over the lifetime of this state machine.
     /// Each entry is `(previous_attempt_id, new_ech_config)`.
     ech_retries: Vec<(Id, EchConfig)>,
+    /// Set once an HTTPS answer has advertised ECH, and never cleared. Keeps the
+    /// plaintext fallback suppressed for the rest of this connection so a later
+    /// answer that drops ECH cannot downgrade the SNI protection.
+    ech_committed: bool,
     /// Network configuration
     network_config: NetworkConfig,
     host: Host,
@@ -942,6 +946,7 @@ impl HappyEyeballs {
             dns_queries: Vec::new(),
             connection_attempts: Vec::new(),
             ech_retries: Vec::new(),
+            ech_committed: false,
             host,
             port,
         };
@@ -1256,6 +1261,14 @@ impl HappyEyeballs {
     }
 
     fn on_dns_response(&mut self, id: Id, response: DnsResult, stale: bool, now: Instant) {
+        // Latch on the first HTTPS answer that advertises ECH. A later answer may
+        // drop ECH (an Optimistic-DNS revalidation that fails or is forged), but
+        // the client has already learned the origin deploys ECH and must not be
+        // downgraded to a plaintext, SNI-leaking attempt.
+        if let DnsResult::Https(Ok(infos)) = &response {
+            self.ech_committed |= infos.iter().any(|i| i.ech_config.is_some());
+        }
+
         // A revalidation response replaces the stale answer of the query it
         // belongs to, rather than opening a new record.
         if let Some(query) = self
@@ -1590,8 +1603,12 @@ impl HappyEyeballs {
         if !self.network_config.ech {
             return false;
         }
-        self.completed_service_infos()
-            .any(|i| i.ech_config.is_some())
+        // Sticky: `ech_committed` stays set after the first ECH answer, so a
+        // revalidation that drops ECH cannot re-enable the plaintext fallback.
+        self.ech_committed
+            || self
+                .completed_service_infos()
+                .any(|i| i.ech_config.is_some())
     }
 
     /// HTTP versions when the host is an IP address (no DNS involved).
