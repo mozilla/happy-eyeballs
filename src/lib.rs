@@ -77,6 +77,13 @@ pub const CONNECTION_ATTEMPT_DELAY: Duration = Duration::from_millis(250);
 /// RFC behavior.
 pub const CONNECTION_ATTEMPT_DELAY_MULTIPLIER: NonZeroU32 = NonZeroU32::MIN;
 
+/// The maximum number of distinct HTTPS-record target names the state machine
+/// issues follow-up A/AAAA queries for. One HTTPS response can list many
+/// `ServiceInfo`s with distinct target names, so without a cap a single answer
+/// fans out into an unbounded number of DNS queries. Target names past this
+/// limit are ignored for resolution.
+pub const MAX_TARGET_NAMES: usize = 8;
+
 /// Input events to the Happy Eyeballs state machine
 #[derive(Debug, Clone, PartialEq)]
 pub enum Input {
@@ -1142,7 +1149,6 @@ impl HappyEyeballs {
         None
     }
 
-    // TODO: Limit number of target names.
     /// > Note that clients are still required to issue A and AAAA queries
     /// > for those TargetNames if they haven't yet received those records.
     ///
@@ -1150,14 +1156,27 @@ impl HappyEyeballs {
     fn send_dns_request_for_target_name(&mut self) -> Option<Output> {
         let any_ech = self.any_ech();
 
-        let target_names = self
+        // A malicious HTTPS answer can carry many ServiceInfos with distinct
+        // target names, so bound the distinct names we resolve to keep one
+        // response from fanning out into unbounded follow-up queries. See
+        // `MAX_TARGET_NAMES`.
+        let mut target_names: Vec<&TargetName> = Vec::new();
+        for info in self
             .completed_service_infos()
             // When any ServiceInfo has ECH, skip resolving targets without ECH.
-            .filter(move |i| !any_ech || i.ech_config.is_some())
-            .map(|i| &i.target_name);
+            .filter(|i| !any_ech || i.ech_config.is_some())
+        {
+            if target_names.len() >= MAX_TARGET_NAMES {
+                break;
+            }
+            if !target_names.contains(&&info.target_name) {
+                target_names.push(&info.target_name);
+            }
+        }
 
         // Next AAAA or A query, respecting single-stack preferences.
         let (target_name, record_type) = target_names
+            .into_iter()
             .flat_map(|tn| {
                 self.network_config
                     .ip
