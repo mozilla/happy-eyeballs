@@ -8,7 +8,7 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use happy_eyeballs::{
     AltSvc, CONNECTION_ATTEMPT_DELAY, ConnectionAttemptHttpVersions, ConnectionResult,
     DnsRecordType, DnsResult, EchConfig, Endpoint, FailureReason, HttpVersion, Id, Input,
-    IpPreference, NetworkConfig, Output, RESOLUTION_DELAY,
+    IpPreference, MAX_TARGET_NAMES, NetworkConfig, Output, RESOLUTION_DELAY,
 };
 
 #[test]
@@ -814,6 +814,43 @@ fn partial_ech_with_alt_svc() {
     // attempt. Alt-svc, SVC2, and fallback all skipped.
     now += CONNECTION_ATTEMPT_DELAY;
     he.expect_idle(now);
+}
+
+/// An HTTPS answer that lists far more distinct target names than
+/// `MAX_TARGET_NAMES`. Only the first `MAX_TARGET_NAMES` are followed up with
+/// A/AAAA queries, so one response cannot fan out into an unbounded number of
+/// DNS queries.
+#[test]
+fn caps_follow_up_queries_for_many_target_names() {
+    use std::collections::HashSet;
+
+    let (now, mut he) = setup();
+
+    let service_infos: Vec<_> = (0..100u16)
+        .map(|i| service_info(i, &format!("svc{i}.example.com."), &[HttpVersion::H2]))
+        .collect();
+
+    expect_initial_dns_queries(&mut he, now);
+    he.input(
+        Input::DnsResult {
+            id: Id::from(0),
+            result: DnsResult::Https(Ok(service_infos)),
+            stale: false,
+        },
+        now,
+    );
+
+    let mut target_names: HashSet<String> = HashSet::new();
+    while let Some(output) = he.process_output(now) {
+        match output {
+            Output::SendDnsQuery { hostname, .. } => {
+                target_names.insert(hostname.into());
+            }
+            _ => break,
+        }
+    }
+
+    assert_eq!(target_names.len(), MAX_TARGET_NAMES);
 }
 
 mod https_port_svcparam_overrides_port_for {
