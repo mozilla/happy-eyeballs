@@ -14,7 +14,7 @@ use std::time::Instant;
 
 use happy_eyeballs::{
     ConnectionAttemptHttpVersions, DnsRecordType, Endpoint, EndpointTarget, FailureReason,
-    HappyEyeballs, HttpVersions, Id, NetworkConfig, Output, ResolutionMode,
+    HappyEyeballs, HttpVersion, HttpVersions, Id, NetworkConfig, Output, ResolutionMode,
 };
 
 fn by_name_config() -> NetworkConfig {
@@ -106,11 +106,7 @@ fn by_name_respects_http_versions() {
     let now = Instant::now();
     let config = NetworkConfig {
         resolution: ResolutionMode::ByName,
-        http_versions: HttpVersions {
-            h1: true,
-            h2: false,
-            h3: false,
-        },
+        http_versions: HttpVersions::only(HttpVersion::H1),
         ..NetworkConfig::default()
     };
     let mut he = HappyEyeballs::new_with_network_config(HOSTNAME, PORT, config).unwrap();
@@ -342,11 +338,7 @@ fn by_name_failure_is_never_dns_resolution() {
     let now = Instant::now();
     let config = NetworkConfig {
         resolution: ResolutionMode::ByName,
-        http_versions: HttpVersions {
-            h1: false,
-            h2: false,
-            h3: true,
-        },
+        http_versions: HttpVersions::only(HttpVersion::H3),
         ..NetworkConfig::default()
     };
     let mut he = HappyEyeballs::new_with_network_config(HOSTNAME, PORT, config).unwrap();

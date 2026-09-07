@@ -578,22 +578,8 @@ fn skip_wait_for_preferred_address_still_waits_for_https() {
 
 /// Config with `version` disabled in `http_versions` and present as the sole alt-svc entry.
 fn alt_svc_disabled_config(version: HttpVersion) -> NetworkConfig {
-    let http_versions = match version {
-        HttpVersion::H3 => HttpVersions {
-            h3: false,
-            ..Default::default()
-        },
-        HttpVersion::H2 => HttpVersions {
-            h2: false,
-            ..Default::default()
-        },
-        HttpVersion::H1 => HttpVersions {
-            h1: false,
-            ..Default::default()
-        },
-    };
     NetworkConfig {
-        http_versions,
+        http_versions: HttpVersions::ALL - version,
         alt_svc: vec![AltSvc {
             host: None,
             port: None,
