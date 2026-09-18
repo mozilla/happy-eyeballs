@@ -414,12 +414,12 @@ fn failure_reported_after_refresh_also_fails() {
     he.expect(Output::Failed(FailureReason::Connection), now);
 }
 
-/// A stale HTTPS answer that advertises ECH commits the client to ECH, which
-/// suppresses the plaintext (non-ECH) origin fallback that would leak the SNI.
-/// A revalidation that drops ECH (a failed or forged lookup) must not undo that
-/// commitment and re-enable the plaintext attempt.
+/// A stale HTTPS answer that advertises ECH restricts the race to ECH endpoints.
+/// The revalidation answer takes preference over the stale one: when the
+/// operator has since removed ECH, the fresh answer lifts that restriction and
+/// the non-ECH endpoint joins the race.
 #[test]
-fn refresh_dropping_ech_keeps_plaintext_fallback_suppressed() {
+fn refresh_dropping_ech_takes_preference() {
     let (mut now, mut he) = setup();
     expect_initial_dns_queries(&mut he, now);
 
@@ -427,7 +427,8 @@ fn refresh_dropping_ech_keeps_plaintext_fallback_suppressed() {
     he.input(in_dns_aaaa_positive(Id::from(1)), now);
     he.input(in_dns_a_negative(Id::from(2)), now);
 
-    // The committed attempt carries ECH, and the stale record is revalidated.
+    // The stale answer is used at once, so the first attempt carries ECH, and
+    // the stale record is revalidated.
     he.expect(
         Output::AttemptConnection {
             id: Id::from(3),
@@ -446,20 +447,13 @@ fn refresh_dropping_ech_keeps_plaintext_fallback_suppressed() {
     );
     he.expect(out_connection_attempt_delay(), now);
 
-    // The revalidation of the HTTPS record fails, dropping the ECH config.
-    he.input(
-        Input::DnsResult {
-            id: Id::from(4),
-            result: DnsResult::Https(Err(())),
-            stale: false,
-        },
-        now,
-    );
+    // The fresh answer no longer advertises ECH.
+    he.input(in_dns_https_positive(Id::from(4)), now);
+    he.expect(out_connection_attempt_delay(), now);
 
-    // Past the connection-attempt delay, no plaintext fallback is emitted; only
-    // the in-flight ECH attempt remains.
+    // Past the connection-attempt delay, the endpoint is raced without ECH.
     now += CONNECTION_ATTEMPT_DELAY;
-    he.expect_idle(now);
+    he.expect(out_attempt_v6_h3(Id::from(5)), now);
 }
 
 /// A revalidation that returns a negative answer removes the candidate; with the
