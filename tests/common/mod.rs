@@ -7,8 +7,8 @@ use std::{
 
 use happy_eyeballs::{
     CONNECTION_ATTEMPT_DELAY, ConnectionAttemptHttpVersions, ConnectionResult, DnsRecordType,
-    DnsResult, EchConfig, Endpoint, HappyEyeballs, HttpVersion, Id, Input, NetworkConfig, Output,
-    RESOLUTION_DELAY, ServiceInfo,
+    DnsResult, EchConfig, Endpoint, EndpointTarget, HappyEyeballs, HttpVersion, Id, Input,
+    NetworkConfig, Output, RESOLUTION_DELAY, ServiceInfo,
 };
 
 pub const HOSTNAME: &str = "example.com";
@@ -371,7 +371,7 @@ pub fn out_attempt_v6_h1_h2(id: Id) -> Output {
     Output::AttemptConnection {
         id,
         endpoint: Endpoint {
-            address: SocketAddr::new(V6_ADDR.into(), PORT),
+            target: EndpointTarget::Address(SocketAddr::new(V6_ADDR.into(), PORT)),
             http_version: ConnectionAttemptHttpVersions::H2OrH1,
             ech_config: None,
         },
@@ -383,7 +383,7 @@ pub fn out_attempt_v6_h2(id: Id) -> Output {
     Output::AttemptConnection {
         id,
         endpoint: Endpoint {
-            address: SocketAddr::new(V6_ADDR.into(), PORT),
+            target: EndpointTarget::Address(SocketAddr::new(V6_ADDR.into(), PORT)),
             http_version: ConnectionAttemptHttpVersions::H2,
             ech_config: None,
         },
@@ -395,7 +395,7 @@ pub fn out_attempt_v6_h3(id: Id) -> Output {
     Output::AttemptConnection {
         id,
         endpoint: Endpoint {
-            address: SocketAddr::new(V6_ADDR.into(), PORT),
+            target: EndpointTarget::Address(SocketAddr::new(V6_ADDR.into(), PORT)),
             http_version: ConnectionAttemptHttpVersions::H3,
             ech_config: None,
         },
@@ -407,7 +407,7 @@ pub fn out_attempt_v6_h3_custom_port(id: Id) -> Output {
     Output::AttemptConnection {
         id,
         endpoint: Endpoint {
-            address: SocketAddr::new(V6_ADDR.into(), CUSTOM_PORT),
+            target: EndpointTarget::Address(SocketAddr::new(V6_ADDR.into(), CUSTOM_PORT)),
             http_version: ConnectionAttemptHttpVersions::H3,
             ech_config: None,
         },
@@ -419,7 +419,7 @@ pub fn out_attempt_v4_h1_h2(id: Id) -> Output {
     Output::AttemptConnection {
         id,
         endpoint: Endpoint {
-            address: SocketAddr::new(V4_ADDR.into(), PORT),
+            target: EndpointTarget::Address(SocketAddr::new(V4_ADDR.into(), PORT)),
             http_version: ConnectionAttemptHttpVersions::H2OrH1,
             ech_config: None,
         },
@@ -431,7 +431,7 @@ pub fn out_attempt_v4_h2(id: Id) -> Output {
     Output::AttemptConnection {
         id,
         endpoint: Endpoint {
-            address: SocketAddr::new(V4_ADDR.into(), PORT),
+            target: EndpointTarget::Address(SocketAddr::new(V4_ADDR.into(), PORT)),
             http_version: ConnectionAttemptHttpVersions::H2,
             ech_config: None,
         },
@@ -443,7 +443,7 @@ pub fn out_attempt_v4_h3(id: Id) -> Output {
     Output::AttemptConnection {
         id,
         endpoint: Endpoint {
-            address: SocketAddr::new(V4_ADDR.into(), PORT),
+            target: EndpointTarget::Address(SocketAddr::new(V4_ADDR.into(), PORT)),
             http_version: ConnectionAttemptHttpVersions::H3,
             ech_config: None,
         },
@@ -455,7 +455,7 @@ pub fn out_attempt_v4_h3_custom_port(id: Id) -> Output {
     Output::AttemptConnection {
         id,
         endpoint: Endpoint {
-            address: SocketAddr::new(V4_ADDR.into(), CUSTOM_PORT),
+            target: EndpointTarget::Address(SocketAddr::new(V4_ADDR.into(), CUSTOM_PORT)),
             http_version: ConnectionAttemptHttpVersions::H3,
             ech_config: None,
         },
@@ -467,7 +467,7 @@ pub fn out_attempt_v6_h2_custom_port(id: Id) -> Output {
     Output::AttemptConnection {
         id,
         endpoint: Endpoint {
-            address: SocketAddr::new(V6_ADDR.into(), CUSTOM_PORT),
+            target: EndpointTarget::Address(SocketAddr::new(V6_ADDR.into(), CUSTOM_PORT)),
             http_version: ConnectionAttemptHttpVersions::H2,
             ech_config: None,
         },
@@ -479,7 +479,7 @@ pub fn out_attempt_v4_h2_custom_port(id: Id) -> Output {
     Output::AttemptConnection {
         id,
         endpoint: Endpoint {
-            address: SocketAddr::new(V4_ADDR.into(), CUSTOM_PORT),
+            target: EndpointTarget::Address(SocketAddr::new(V4_ADDR.into(), CUSTOM_PORT)),
             http_version: ConnectionAttemptHttpVersions::H2,
             ech_config: None,
         },
@@ -496,7 +496,7 @@ pub fn out_attempt(
     Output::AttemptConnection {
         id,
         endpoint: Endpoint {
-            address: SocketAddr::new(addr, port),
+            target: EndpointTarget::Address(SocketAddr::new(addr, port)),
             http_version,
             ech_config: None,
         },

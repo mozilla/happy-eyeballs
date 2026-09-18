@@ -11,7 +11,7 @@ use std::time::Instant;
 
 use happy_eyeballs::{
     CONNECTION_ATTEMPT_DELAY, ConnectionAttemptHttpVersions, DnsRecordType, DnsResult, Endpoint,
-    FailureReason, HappyEyeballs, Id, Input, IpPreference, NetworkConfig, Output,
+    EndpointTarget, FailureReason, HappyEyeballs, Id, Input, IpPreference, NetworkConfig, Output,
 };
 
 /// Dual-stack (the default), with the HTTPS query answered negative so the AAAA
@@ -433,7 +433,7 @@ fn refresh_dropping_ech_takes_preference() {
         Output::AttemptConnection {
             id: Id::from(3),
             endpoint: Endpoint {
-                address: SocketAddr::new(V6_ADDR.into(), PORT),
+                target: EndpointTarget::Address(SocketAddr::new(V6_ADDR.into(), PORT)),
                 http_version: ConnectionAttemptHttpVersions::H3,
                 ech_config: Some(ech_config()),
             },
