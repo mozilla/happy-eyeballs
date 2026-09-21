@@ -11,4 +11,9 @@ thiserror = { version = "2.0.12", default-features = false }
 url = { version = "2.5.7", default-features = false }
 
 [dev-dependencies]
+divan = { version = "5.0.2", package = "codspeed-divan-compat" }
 env_logger = { version = "0.10", default-features = false }
+
+[[bench]]
+name = "state_machine"
+harness = false
