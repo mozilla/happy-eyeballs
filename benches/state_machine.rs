@@ -19,15 +19,11 @@ use std::{
     time::Instant,
 };
 
-use divan::Bencher;
+use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use happy_eyeballs::{
     AltSvc, ConnectionResult, DnsRecordType, DnsResult, EchConfig, HappyEyeballs, HttpVersion,
     HttpVersions, Input, IpPreference, NetworkConfig, Output, ResolutionMode, ServiceInfo,
 };
-
-fn main() {
-    divan::main();
-}
 
 const HOSTNAME: &str = "example.com";
 const SVC1: &str = "svc1.example.com.";
@@ -203,145 +199,101 @@ fn drive(scenario: &Scenario, start: Instant) -> usize {
     outputs
 }
 
-fn bench_scenario(bencher: Bencher, scenario: Scenario) {
+fn bench_scenario(c: &mut Criterion, name: &str, scenario: &Scenario) {
     let start = Instant::now();
-    bencher.bench(|| black_box(drive(black_box(&scenario), start)));
+    c.bench_function(name, |b| {
+        b.iter(|| black_box(drive(black_box(scenario), start)));
+    });
 }
 
-/// Dual-stack origin with an HTTPS record advertising h3/h2/h1; the first
-/// attempt succeeds. The common, happy path.
-#[divan::bench]
-fn dual_stack_success(bencher: Bencher) {
-    bench_scenario(bencher, Scenario::default());
-}
+/// The individual connection establishment scenarios.
+fn scenarios(c: &mut Criterion) {
+    // Dual-stack origin with an HTTPS record advertising h3/h2/h1; the first
+    // attempt succeeds. The common, happy path.
+    bench_scenario(c, "dual_stack_success", &Scenario::default());
 
-/// Same, but every attempt fails, so the full race runs to exhaustion before
-/// the machine reports a connection failure.
-#[divan::bench]
-fn dual_stack_all_attempts_fail(bencher: Bencher) {
+    // Same, but every attempt fails, so the full race runs to exhaustion before
+    // the machine reports a connection failure.
     bench_scenario(
-        bencher,
-        Scenario {
+        c,
+        "dual_stack_all_attempts_fail",
+        &Scenario {
             connections: Connections::AllFail,
             ..Scenario::default()
         },
     );
-}
 
-/// No HTTPS record (negative answer): plain A/AAAA racing over h2/h1.
-#[divan::bench]
-fn no_https_record(bencher: Bencher) {
+    // No HTTPS record (negative answer): plain A/AAAA racing over h2/h1.
     bench_scenario(
-        bencher,
-        Scenario {
+        c,
+        "no_https_record",
+        &Scenario {
             https: Some(Err(())),
             ..Scenario::default()
         },
     );
-}
 
-/// DNS resolution fails entirely, the shortest path through the machine.
-#[divan::bench]
-fn dns_resolution_failure(bencher: Bencher) {
+    // DNS resolution fails entirely, the shortest path through the machine.
     bench_scenario(
-        bencher,
-        Scenario {
+        c,
+        "dns_resolution_failure",
+        &Scenario {
             https: Some(Err(())),
             aaaa: Err(()),
             a: Err(()),
             ..Scenario::default()
         },
     );
-}
 
-/// Two HTTPS records pointing at alternative target names with address hints:
-/// each target name is resolved in turn, and the resulting endpoints are
-/// grouped by service priority.
-#[divan::bench]
-fn https_records_with_target_names(bencher: Bencher) {
+    // Two HTTPS records pointing at alternative target names with address
+    // hints: each target name is resolved in turn, and the resulting endpoints
+    // are grouped by service priority.
     let mut svc1 = service_info(1, SVC1, &[HttpVersion::H3, HttpVersion::H2]);
     svc1.ipv6_hints = vec![v6(10)];
     svc1.ipv4_hints = vec![v4(10)];
     let mut svc2 = service_info(2, SVC2, &[HttpVersion::H2, HttpVersion::H1]);
     svc2.ipv6_hints = vec![v6(20)];
-
     bench_scenario(
-        bencher,
-        Scenario {
+        c,
+        "https_records_with_target_names",
+        &Scenario {
             https: Some(Ok(vec![svc1, svc2])),
             connections: Connections::AllFail,
             ..Scenario::default()
         },
     );
-}
 
-/// Large address sets: the record set flattens into `addrs * 2 families * 2
-/// protocol variants` endpoints that are interleaved and then raced until one
-/// succeeds (here, the last one).
-#[divan::bench(args = [2, 8, 32])]
-fn many_addresses_race(bencher: Bencher, addrs: u8) {
-    let succeed_on = usize::from(addrs) * 4 - 1;
-    bench_scenario(
-        bencher,
-        Scenario {
-            aaaa: Ok(v6_addrs(u16::from(addrs))),
-            a: Ok(v4_addrs(addrs)),
-            connections: Connections::SucceedOn(succeed_on),
-            ..Scenario::default()
-        },
-    );
-}
-
-/// Large address sets where the first attempt wins: dominated by endpoint
-/// flattening, ordering and interleaving rather than by the race itself.
-#[divan::bench(args = [2, 8, 32])]
-fn many_addresses_first_wins(bencher: Bencher, addrs: u8) {
-    bench_scenario(
-        bencher,
-        Scenario {
-            aaaa: Ok(v6_addrs(u16::from(addrs))),
-            a: Ok(v4_addrs(addrs)),
-            ..Scenario::default()
-        },
-    );
-}
-
-/// The server rejects ECH and supplies a `retry_config`: the machine schedules
-/// a retry to the same endpoint with the new configuration.
-#[divan::bench]
-fn ech_retry(bencher: Bencher) {
+    // The server rejects ECH and supplies a `retry_config`: the machine
+    // schedules a retry to the same endpoint with the new configuration.
     let mut svc = service_info(1, HOSTNAME, &[HttpVersion::H3, HttpVersion::H2]);
     svc.ech_config = Some(ech_config());
-
     bench_scenario(
-        bencher,
-        Scenario {
+        c,
+        "ech_retry",
+        &Scenario {
             https: Some(Ok(vec![svc])),
             connections: Connections::EchRetryThenSuccess,
             ..Scenario::default()
         },
     );
-}
 
-/// Optimistic DNS: the resolver answers from a stale cache entry, which the
-/// machine uses at once while emitting background revalidation queries.
-#[divan::bench]
-fn optimistic_dns_stale_answers(bencher: Bencher) {
+    // Optimistic DNS: the resolver answers from a stale cache entry, which the
+    // machine uses at once while emitting background revalidation queries.
     bench_scenario(
-        bencher,
-        Scenario {
+        c,
+        "optimistic_dns_stale_answers",
+        &Scenario {
             stale: true,
             ..Scenario::default()
         },
     );
-}
 
-/// IPv6-only network: only AAAA is queried and only IPv6 endpoints are raced.
-#[divan::bench]
-fn ipv6_only(bencher: Bencher) {
+    // IPv6-only network: only AAAA is queried and only IPv6 endpoints are
+    // raced.
     bench_scenario(
-        bencher,
-        Scenario {
+        c,
+        "ipv6_only",
+        &Scenario {
             config: NetworkConfig {
                 ip: IpPreference::Ipv6Only,
                 ..NetworkConfig::default()
@@ -351,15 +303,13 @@ fn ipv6_only(bencher: Bencher) {
             ..Scenario::default()
         },
     );
-}
 
-/// HTTP/1.1 only, dual stack: the ALPN filtering drops h3 and h2 from every
-/// record before endpoints are built.
-#[divan::bench]
-fn http1_only(bencher: Bencher) {
+    // HTTP/1.1 only, dual stack: the ALPN filtering drops h3 and h2 from every
+    // record before endpoints are built.
     bench_scenario(
-        bencher,
-        Scenario {
+        c,
+        "http1_only",
+        &Scenario {
             config: NetworkConfig {
                 http_versions: HttpVersions {
                     h1: true,
@@ -374,15 +324,13 @@ fn http1_only(bencher: Bencher) {
             ..Scenario::default()
         },
     );
-}
 
-/// Alt-svc entries from previous connections are resolved and raced alongside
-/// the origin.
-#[divan::bench]
-fn with_alt_svc(bencher: Bencher) {
+    // Alt-svc entries from previous connections are resolved and raced
+    // alongside the origin.
     bench_scenario(
-        bencher,
-        Scenario {
+        c,
+        "with_alt_svc",
+        &Scenario {
             config: NetworkConfig {
                 alt_svc: vec![
                     AltSvc {
@@ -402,14 +350,12 @@ fn with_alt_svc(bencher: Bencher) {
             ..Scenario::default()
         },
     );
-}
 
-/// By-name mode: no DNS at all, the origin is attempted by hostname.
-#[divan::bench]
-fn by_name(bencher: Bencher) {
+    // By-name mode: no DNS at all, the origin is attempted by hostname.
     bench_scenario(
-        bencher,
-        Scenario {
+        c,
+        "by_name",
+        &Scenario {
             config: NetworkConfig {
                 resolution: ResolutionMode::ByName,
                 ..NetworkConfig::default()
@@ -417,15 +363,13 @@ fn by_name(bencher: Bencher) {
             ..Scenario::default()
         },
     );
-}
 
-/// By-name mode with the origin HTTPS record fetched for its ALPN, so h3 is
-/// attempted by name as well.
-#[divan::bench]
-fn by_name_with_https_rr(bencher: Bencher) {
+    // By-name mode with the origin HTTPS record fetched for its ALPN, so h3 is
+    // attempted by name as well.
     bench_scenario(
-        bencher,
-        Scenario {
+        c,
+        "by_name_with_https_rr",
+        &Scenario {
             config: NetworkConfig {
                 resolution: ResolutionMode::ByNameWithHttpsRr,
                 ..NetworkConfig::default()
@@ -436,13 +380,55 @@ fn by_name_with_https_rr(bencher: Bencher) {
     );
 }
 
-/// Constructing the state machine, which parses the target host.
-mod construction {
-    use super::{HOSTNAME, HappyEyeballs, PORT};
-    use std::hint::black_box;
+/// Large address sets: the record set flattens into `addrs * 2 families * 2
+/// protocol variants` endpoints that are interleaved and then raced, either
+/// until the last endpoint succeeds (`race`) or until the first one does
+/// (`first_wins`, dominated by flattening, ordering and interleaving rather
+/// than by the race itself).
+fn many_addresses(c: &mut Criterion) {
+    let start = Instant::now();
+    let mut group = c.benchmark_group("many_addresses");
 
-    #[divan::bench(args = [HOSTNAME, "192.0.2.1", "[2001:db8::1]"])]
-    fn new(host: &str) -> HappyEyeballs {
-        HappyEyeballs::new(black_box(host), black_box(PORT)).unwrap()
+    for addrs in [2_u8, 8, 32] {
+        let first_wins = Scenario {
+            aaaa: Ok(v6_addrs(u16::from(addrs))),
+            a: Ok(v4_addrs(addrs)),
+            ..Scenario::default()
+        };
+        let race = Scenario {
+            aaaa: Ok(v6_addrs(u16::from(addrs))),
+            a: Ok(v4_addrs(addrs)),
+            connections: Connections::SucceedOn(usize::from(addrs) * 4 - 1),
+            ..Scenario::default()
+        };
+
+        group.bench_with_input(BenchmarkId::new("race", addrs), &race, |b, scenario| {
+            b.iter(|| black_box(drive(black_box(scenario), start)));
+        });
+        group.bench_with_input(
+            BenchmarkId::new("first_wins", addrs),
+            &first_wins,
+            |b, scenario| {
+                b.iter(|| black_box(drive(black_box(scenario), start)));
+            },
+        );
     }
+
+    group.finish();
 }
+
+/// Constructing the state machine, which parses the target host.
+fn construction(c: &mut Criterion) {
+    let mut group = c.benchmark_group("construction");
+
+    for host in [HOSTNAME, "192.0.2.1", "[2001:db8::1]"] {
+        group.bench_with_input(BenchmarkId::new("new", host), host, |b, host| {
+            b.iter(|| HappyEyeballs::new(black_box(host), black_box(PORT)).unwrap());
+        });
+    }
+
+    group.finish();
+}
+
+criterion_group!(benches, scenarios, many_addresses, construction);
+criterion_main!(benches);
