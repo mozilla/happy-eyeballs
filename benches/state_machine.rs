@@ -3,14 +3,21 @@
 //! The crate is a pure, deterministic state machine: the caller feeds it
 //! [`Input`]s and drains [`Output`]s. Every benchmark therefore drives a
 //! complete connection establishment, from the first DNS query to the final
-//! `Succeeded`/`Failed` output, using a small in-benchmark driver that answers
-//! DNS queries and connection attempts from a canned scenario.
+//! `Succeeded`/`Failed` output, using a small driver that answers DNS queries
+//! and connection attempts from a canned scenario.
 //!
 //! The scenarios cover the paths that matter in production: plain dual-stack
 //! resolution, HTTPS (SVCB) records with alternative target names, large
 //! address sets (endpoint flattening, interleaving and racing), failing races,
 //! ECH retries, Optimistic DNS revalidation, the by-name resolution modes and
 //! alt-svc.
+//!
+//! The record builders, driver methods and constants are the ones the
+//! integration tests use, shared from `tests/common`.
+
+#[path = "../tests/common/mod.rs"]
+mod common;
+use common::*;
 
 use std::{
     collections::VecDeque,
@@ -19,51 +26,30 @@ use std::{
     time::Instant,
 };
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
-use happy_eyeballs::{
-    AltSvc, ConnectionResult, DnsRecordType, DnsResult, EchConfig, HappyEyeballs, HttpVersion,
-    HttpVersions, Input, IpPreference, NetworkConfig, Output, ResolutionMode, ServiceInfo,
+use criterion::{
+    BenchmarkGroup, BenchmarkId, Criterion, criterion_group, criterion_main, measurement::WallTime,
 };
-
-const HOSTNAME: &str = "example.com";
-const SVC1: &str = "svc1.example.com.";
-const SVC2: &str = "svc2.example.com.";
-const PORT: u16 = 443;
+use happy_eyeballs::{
+    AltSvc, DnsRecordType, DnsResult, HappyEyeballs, HttpVersion, HttpVersions, Id, Input,
+    IpPreference, NetworkConfig, Output, ResolutionMode, ServiceInfo,
+};
 
 /// Upper bound on driver iterations, so a scenario can never spin forever
 /// inside a benchmark.
 const MAX_STEPS: usize = 100_000;
 
-fn v6(n: u16) -> Ipv6Addr {
-    Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, n)
-}
-
-fn v4(n: u8) -> Ipv4Addr {
-    Ipv4Addr::new(192, 0, 2, n)
-}
-
+/// `count` consecutive IPv6 addresses starting at [`V6_ADDR`]. The tests only
+/// ever need a handful of named addresses; the benchmarks scale the count.
 fn v6_addrs(count: u16) -> Vec<Ipv6Addr> {
-    (1..=count).map(v6).collect()
+    let base = u128::from(V6_ADDR);
+    (0..u128::from(count)).map(|n| (base + n).into()).collect()
 }
 
+/// `count` consecutive IPv4 addresses starting at [`V4_ADDR`], the IPv4
+/// counterpart of [`v6_addrs`].
 fn v4_addrs(count: u8) -> Vec<Ipv4Addr> {
-    (1..=count).map(v4).collect()
-}
-
-fn ech_config() -> EchConfig {
-    EchConfig::new(vec![1, 2, 3, 4, 5, 6, 7, 8])
-}
-
-fn service_info(priority: u16, target_name: &str, alpns: &[HttpVersion]) -> ServiceInfo {
-    ServiceInfo {
-        priority,
-        target_name: target_name.into(),
-        alpn_http_versions: alpns.iter().copied().collect(),
-        ech_config: None,
-        ipv4_hints: vec![],
-        ipv6_hints: vec![],
-        port: None,
-    }
+    let base = u32::from(V4_ADDR);
+    (0..u32::from(count)).map(|n| (base + n).into()).collect()
 }
 
 /// How the driver answers connection attempts.
@@ -80,6 +66,7 @@ enum Connections {
 
 /// A canned set of DNS answers and connection results, plus the network
 /// configuration the state machine runs with.
+#[derive(Clone)]
 struct Scenario {
     config: NetworkConfig,
     /// Answer to every HTTPS (SVCB) query, or `None` to leave it unanswered.
@@ -112,26 +99,32 @@ impl Default for Scenario {
 }
 
 impl Scenario {
-    fn dns_result(&self, record_type: DnsRecordType) -> Option<DnsResult> {
-        match record_type {
-            DnsRecordType::Https => self.https.clone().map(DnsResult::Https),
-            DnsRecordType::Aaaa => Some(DnsResult::Aaaa(self.aaaa.clone())),
-            DnsRecordType::A => Some(DnsResult::A(self.a.clone())),
-        }
+    /// The answer to a query of `record_type`, or `None` to leave the query
+    /// unanswered.
+    fn dns_input(&self, id: Id, record_type: DnsRecordType, allow_stale: bool) -> Option<Input> {
+        let result = match record_type {
+            DnsRecordType::Https => self.https.clone().map(DnsResult::Https)?,
+            DnsRecordType::Aaaa => DnsResult::Aaaa(self.aaaa.clone()),
+            DnsRecordType::A => DnsResult::A(self.a.clone()),
+        };
+        Some(Input::DnsResult {
+            id,
+            result,
+            stale: self.stale && allow_stale,
+        })
     }
 
-    fn connection_result(&self, attempt: usize, is_ech_retry: bool) -> ConnectionResult {
+    /// The result of the `attempt`th (0-based) connection attempt.
+    fn connection_input(&self, id: Id, attempt: usize, is_ech_retry: bool) -> Input {
         match self.connections {
-            Connections::SucceedOn(n) if attempt == n => ConnectionResult::Success,
-            Connections::SucceedOn(_) | Connections::AllFail => {
-                ConnectionResult::Failure("connection refused".to_string())
-            }
+            Connections::SucceedOn(n) if attempt == n => in_connection_result_positive(id),
+            Connections::SucceedOn(_) | Connections::AllFail => in_connection_result_negative(id),
             // A retry to a retry is not allowed, so only the very first attempt
             // reports one.
             Connections::EchRetryThenSuccess if attempt == 0 && !is_ech_retry => {
-                ConnectionResult::EchRetry(ech_config())
+                in_connection_result_ech_retry(id)
             }
-            Connections::EchRetryThenSuccess => ConnectionResult::Success,
+            Connections::EchRetryThenSuccess => in_connection_result_positive(id),
         }
     }
 }
@@ -151,71 +144,67 @@ fn drive(scenario: &Scenario, start: Instant) -> usize {
     let mut outputs = 0;
 
     for _ in 0..MAX_STEPS {
-        match he.process_output(now) {
-            Some(Output::SendDnsQuery {
+        let Some(output) = he.process_output(now) else {
+            // Nothing left to emit: deliver the next queued answer, if any.
+            let Some(input) = pending.pop_front() else {
+                break;
+            };
+            he.input(input, now);
+            continue;
+        };
+        outputs += 1;
+
+        match output {
+            Output::SendDnsQuery {
                 id,
                 record_type,
                 allow_stale,
                 ..
-            }) => {
-                outputs += 1;
-                if let Some(result) = scenario.dns_result(record_type) {
-                    pending.push_back(Input::DnsResult {
-                        id,
-                        result,
-                        stale: scenario.stale && allow_stale,
-                    });
-                }
-            }
-            Some(Output::AttemptConnection {
+            } => pending.extend(scenario.dns_input(id, record_type, allow_stale)),
+            Output::AttemptConnection {
                 id, is_ech_retry, ..
-            }) => {
-                outputs += 1;
-                let result = scenario.connection_result(attempts, is_ech_retry);
+            } => {
+                pending.push_back(scenario.connection_input(id, attempts, is_ech_retry));
                 attempts += 1;
-                pending.push_back(Input::ConnectionResult { id, result });
             }
-            Some(Output::CancelConnection { .. }) => outputs += 1,
-            Some(Output::Timer { duration }) => {
-                outputs += 1;
+            Output::CancelConnection { .. } => {}
+            Output::Timer { duration } => {
                 if let Some(input) = pending.pop_front() {
-                    he.process_input(input, now);
+                    he.input(input, now);
                 } else {
                     // Nothing to deliver: let the timer expire.
                     now += duration;
                 }
             }
-            Some(Output::Succeeded | Output::Failed(_)) => {
-                outputs += 1;
-                break;
-            }
-            None => match pending.pop_front() {
-                Some(input) => he.process_input(input, now),
-                None => break,
-            },
+            Output::Succeeded | Output::Failed(_) => break,
         }
     }
 
     outputs
 }
 
-fn bench_scenario(c: &mut Criterion, name: &str, scenario: &Scenario) {
+/// Drive `scenario` to completion, under `id`.
+fn bench_scenario(group: &mut BenchmarkGroup<'_, WallTime>, id: BenchmarkId, scenario: &Scenario) {
     let start = Instant::now();
-    c.bench_function(name, |b| {
+    group.bench_with_input(id, scenario, |b, scenario| {
         b.iter(|| black_box(drive(black_box(scenario), start)));
     });
 }
 
 /// The individual connection establishment scenarios.
 fn scenarios(c: &mut Criterion) {
+    let mut group = c.benchmark_group("scenario");
+    let mut bench = |name: &str, scenario: &Scenario| {
+        bench_scenario(&mut group, BenchmarkId::from_parameter(name), scenario);
+    };
+
     // Dual-stack origin with an HTTPS record advertising h3/h2/h1; the first
     // attempt succeeds. The common, happy path.
-    bench_scenario(c, "dual_stack_success", &Scenario::default());
+    bench("dual_stack_success", &Scenario::default());
 
     // Same, but every attempt fails, so the full race runs to exhaustion before
     // the machine reports a connection failure.
-    bench_scenario(
-        c,
+    bench(
         "dual_stack_all_attempts_fail",
         &Scenario {
             connections: Connections::AllFail,
@@ -224,8 +213,7 @@ fn scenarios(c: &mut Criterion) {
     );
 
     // No HTTPS record (negative answer): plain A/AAAA racing over h2/h1.
-    bench_scenario(
-        c,
+    bench(
         "no_https_record",
         &Scenario {
             https: Some(Err(())),
@@ -234,8 +222,7 @@ fn scenarios(c: &mut Criterion) {
     );
 
     // DNS resolution fails entirely, the shortest path through the machine.
-    bench_scenario(
-        c,
+    bench(
         "dns_resolution_failure",
         &Scenario {
             https: Some(Err(())),
@@ -248,16 +235,16 @@ fn scenarios(c: &mut Criterion) {
     // Two HTTPS records pointing at alternative target names with address
     // hints: each target name is resolved in turn, and the resulting endpoints
     // are grouped by service priority.
-    let mut svc1 = service_info(1, SVC1, &[HttpVersion::H3, HttpVersion::H2]);
-    svc1.ipv6_hints = vec![v6(10)];
-    svc1.ipv4_hints = vec![v4(10)];
-    let mut svc2 = service_info(2, SVC2, &[HttpVersion::H2, HttpVersion::H1]);
-    svc2.ipv6_hints = vec![v6(20)];
-    bench_scenario(
-        c,
+    bench(
         "https_records_with_target_names",
         &Scenario {
-            https: Some(Ok(vec![svc1, svc2])),
+            https: Some(Ok(vec![
+                service_info(1, SVC1, &[HttpVersion::H3, HttpVersion::H2])
+                    .ipv6_hints(vec![V6_ADDR_2])
+                    .ipv4_hints(vec![V4_ADDR_2]),
+                service_info(2, SVC2, &[HttpVersion::H2, HttpVersion::H1])
+                    .ipv6_hints(vec![V6_ADDR_3]),
+            ])),
             connections: Connections::AllFail,
             ..Scenario::default()
         },
@@ -265,13 +252,12 @@ fn scenarios(c: &mut Criterion) {
 
     // The server rejects ECH and supplies a `retry_config`: the machine
     // schedules a retry to the same endpoint with the new configuration.
-    let mut svc = service_info(1, HOSTNAME, &[HttpVersion::H3, HttpVersion::H2]);
-    svc.ech_config = Some(ech_config());
-    bench_scenario(
-        c,
+    bench(
         "ech_retry",
         &Scenario {
-            https: Some(Ok(vec![svc])),
+            https: Some(Ok(vec![
+                service_info(1, HOSTNAME, &[HttpVersion::H3, HttpVersion::H2]).ech(),
+            ])),
             connections: Connections::EchRetryThenSuccess,
             ..Scenario::default()
         },
@@ -279,8 +265,7 @@ fn scenarios(c: &mut Criterion) {
 
     // Optimistic DNS: the resolver answers from a stale cache entry, which the
     // machine uses at once while emitting background revalidation queries.
-    bench_scenario(
-        c,
+    bench(
         "optimistic_dns_stale_answers",
         &Scenario {
             stale: true,
@@ -290,8 +275,7 @@ fn scenarios(c: &mut Criterion) {
 
     // IPv6-only network: only AAAA is queried and only IPv6 endpoints are
     // raced.
-    bench_scenario(
-        c,
+    bench(
         "ipv6_only",
         &Scenario {
             config: NetworkConfig {
@@ -306,8 +290,7 @@ fn scenarios(c: &mut Criterion) {
 
     // HTTP/1.1 only, dual stack: the ALPN filtering drops h3 and h2 from every
     // record before endpoints are built.
-    bench_scenario(
-        c,
+    bench(
         "http1_only",
         &Scenario {
             config: NetworkConfig {
@@ -327,8 +310,7 @@ fn scenarios(c: &mut Criterion) {
 
     // Alt-svc entries from previous connections are resolved and raced
     // alongside the origin.
-    bench_scenario(
-        c,
+    bench(
         "with_alt_svc",
         &Scenario {
             config: NetworkConfig {
@@ -352,8 +334,7 @@ fn scenarios(c: &mut Criterion) {
     );
 
     // By-name mode: no DNS at all, the origin is attempted by hostname.
-    bench_scenario(
-        c,
+    bench(
         "by_name",
         &Scenario {
             config: NetworkConfig {
@@ -366,8 +347,7 @@ fn scenarios(c: &mut Criterion) {
 
     // By-name mode with the origin HTTPS record fetched for its ALPN, so h3 is
     // attempted by name as well.
-    bench_scenario(
-        c,
+    bench(
         "by_name_with_https_rr",
         &Scenario {
             config: NetworkConfig {
@@ -378,6 +358,8 @@ fn scenarios(c: &mut Criterion) {
             ..Scenario::default()
         },
     );
+
+    group.finish();
 }
 
 /// Large address sets: the record set flattens into `addrs * 2 families * 2
@@ -386,7 +368,6 @@ fn scenarios(c: &mut Criterion) {
 /// (`first_wins`, dominated by flattening, ordering and interleaving rather
 /// than by the race itself).
 fn many_addresses(c: &mut Criterion) {
-    let start = Instant::now();
     let mut group = c.benchmark_group("many_addresses");
 
     for addrs in [2_u8, 8, 32] {
@@ -396,21 +377,15 @@ fn many_addresses(c: &mut Criterion) {
             ..Scenario::default()
         };
         let race = Scenario {
-            aaaa: Ok(v6_addrs(u16::from(addrs))),
-            a: Ok(v4_addrs(addrs)),
             connections: Connections::SucceedOn(usize::from(addrs) * 4 - 1),
-            ..Scenario::default()
+            ..first_wins.clone()
         };
 
-        group.bench_with_input(BenchmarkId::new("race", addrs), &race, |b, scenario| {
-            b.iter(|| black_box(drive(black_box(scenario), start)));
-        });
-        group.bench_with_input(
+        bench_scenario(&mut group, BenchmarkId::new("race", addrs), &race);
+        bench_scenario(
+            &mut group,
             BenchmarkId::new("first_wins", addrs),
             &first_wins,
-            |b, scenario| {
-                b.iter(|| black_box(drive(black_box(scenario), start)));
-            },
         );
     }
 
@@ -422,7 +397,7 @@ fn construction(c: &mut Criterion) {
     let mut group = c.benchmark_group("construction");
 
     for host in [HOSTNAME, "192.0.2.1", "[2001:db8::1]"] {
-        group.bench_with_input(BenchmarkId::new("new", host), host, |b, host| {
+        group.bench_with_input(BenchmarkId::from_parameter(host), host, |b, host| {
             b.iter(|| HappyEyeballs::new(black_box(host), black_box(PORT)).unwrap());
         });
     }
