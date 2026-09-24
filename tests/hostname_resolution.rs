@@ -580,3 +580,60 @@ fn single_stack_target_name_skips_disabled_address_family() {
         he.expect(out_resolution_delay(), now);
     }
 }
+
+/// On a single-stack network, an HTTPS record's IP hints for the disabled
+/// address family must not be attempted. The hints come straight from the DNS
+/// answer, so without this the record decides which family the client connects
+/// over, e.g. IPv6 for a client that has IPv6 disabled.
+#[test]
+fn single_stack_skips_disabled_address_family_hints() {
+    struct Case {
+        ip: IpPreference,
+        /// The only address-family query sent for the origin domain.
+        dns_query: Output,
+        dns_response: Input,
+        /// The enabled family's hint over each protocol; nothing else.
+        expected_connections: [Output; 2],
+    }
+
+    let cases = vec![
+        Case {
+            ip: IpPreference::Ipv4Only,
+            dns_query: out_send_dns_a(Id::from(1)),
+            dns_response: in_dns_a_negative(Id::from(1)),
+            expected_connections: [
+                out_attempt_v4_h3(Id::from(2)),
+                out_attempt_v4_h2(Id::from(3)),
+            ],
+        },
+        Case {
+            ip: IpPreference::Ipv6Only,
+            dns_query: out_send_dns_aaaa(Id::from(1)),
+            dns_response: in_dns_aaaa_negative(Id::from(1)),
+            expected_connections: [
+                out_attempt_v6_h3(Id::from(2)),
+                out_attempt_v6_h2(Id::from(3)),
+            ],
+        },
+    ];
+
+    for case in cases {
+        let (mut now, mut he) = setup_with_config(NetworkConfig {
+            ip: case.ip,
+            ..NetworkConfig::default()
+        });
+
+        he.expect(out_send_dns_https(Id::from(0)), now);
+        he.expect(case.dns_query, now);
+        // The HTTPS record carries a hint for both address families.
+        he.input(in_dns_https_positive_v4_and_v6_hints(Id::from(0)), now);
+        he.expect(out_resolution_delay(), now);
+        he.input(case.dns_response, now);
+
+        let [first, second] = case.expected_connections;
+        he.expect(first, now);
+        he.expect(out_connection_attempt_delay(), now);
+        // No attempt to the disabled family's hint follows.
+        he.expect_connection_attempts([second], &mut now);
+    }
+}

@@ -619,6 +619,17 @@ impl IpPreference {
         .then_some(DnsRecordType::A);
         aaaa.into_iter().chain(a)
     }
+
+    /// Whether an address of `ip`'s family may be attempted. On a single-stack
+    /// network that is only the enabled family, matching the record types
+    /// queried per [`Self::address_record_types`].
+    fn allows(&self, ip: IpAddr) -> bool {
+        match self {
+            IpPreference::DualStackPreferV6 | IpPreference::DualStackPreferV4 => true,
+            IpPreference::Ipv6Only => ip.is_ipv6(),
+            IpPreference::Ipv4Only => ip.is_ipv4(),
+        }
+    }
 }
 
 /// Alternative service information from previous connections.
@@ -1680,7 +1691,7 @@ impl HappyEyeballs {
                     }
                     _ => None,
                 });
-            let bucket = info.flatten_into_endpoints(
+            let mut bucket = info.flatten_into_endpoints(
                 self.port,
                 ipv4_addrs,
                 ipv6_addrs,
@@ -1690,6 +1701,14 @@ impl HappyEyeballs {
                     .then(|| self.origin_host_str())
                     .flatten(),
             );
+            // The record's IP hints come from the DNS answer whatever the
+            // configured address family. On a single-stack network drop those
+            // of the disabled family, which is never queried either.
+            bucket.retain(|endpoint| {
+                endpoint
+                    .address()
+                    .is_none_or(|address| self.network_config.ip.allows(address.ip()))
+            });
             endpoints.extend(interleave_endpoints(bucket, prefer_v6));
         }
 
@@ -1904,7 +1923,10 @@ impl HappyEyeballs {
         match &alt_svc.host {
             // An alt-svc host is a raw string that may be an IP literal.
             Some(host) => match host.parse::<IpAddr>() {
-                Ok(ip) => vec![ip],
+                Ok(ip) if self.network_config.ip.allows(ip) => vec![ip],
+                // A literal of the address family disabled on a single-stack
+                // network, for which a domain would not be resolved either.
+                Ok(_) => Vec::new(),
                 Err(_) => self.dns_resolved_addrs(host),
             },
             None => self.origin_addrs(),
