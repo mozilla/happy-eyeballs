@@ -1,3 +1,5 @@
+[![CodSpeed](https://img.shields.io/endpoint?url=https://codspeed.io/badge.json)](https://app.codspeed.io/mozilla/happy-eyeballs?utm_source=badge)
+
 <!-- cargo-rdme start -->
 
 # Happy Eyeballs v3 Implementation
