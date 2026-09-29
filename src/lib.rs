@@ -326,10 +326,8 @@ impl ServiceInfo {
         ipv4_addrs: Option<Result<&[Ipv4Addr], ()>>,
         // As `ipv4_addrs`, but for the AAAA query.
         ipv6_addrs: Option<Result<&[Ipv6Addr], ()>>,
-        // The HTTP versions the client allows; used to filter this record's own
-        // ALPNs.
-        enabled_http_versions: &HttpVersions,
-        ech_enabled: bool,
+        // Filters this record's ALPNs, ECH and IP hints.
+        network_config: &NetworkConfig,
         // When `Some(origin_host)`, build by-name endpoints
         // ([`EndpointTarget::Name`]) to this record's target name instead of
         // address endpoints, ignoring the IP hints. Used by
@@ -338,6 +336,7 @@ impl ServiceInfo {
         by_name: Option<&str>,
     ) -> Vec<Endpoint> {
         let port = self.port.unwrap_or(port);
+        let ech_enabled = network_config.ech;
 
         // Each ServiceMode record's ALPN SvcParam lists the protocols available
         // at its own TargetName, so use only this record's ALPNs, never another
@@ -350,7 +349,7 @@ impl ServiceInfo {
         //
         // <https://www.rfc-editor.org/rfc/rfc9460#section-7.1.1>
         let mut versions = self.alpn_http_versions.clone();
-        enabled_http_versions.filter_disabled(&mut versions);
+        network_config.http_versions.filter_disabled(&mut versions);
         let http_versions = ConnectionAttemptHttpVersions::from_http_versions(&versions);
 
         // By-name mode: connect to the record's target name over each advertised
@@ -415,6 +414,10 @@ impl ServiceInfo {
             .cloned()
             .map(IpAddr::V6)
             .chain(hint_v4.iter().cloned().map(IpAddr::V4))
+            // Hints come from the DNS answer whatever the configured address
+            // family. On a single-stack network drop those of the disabled
+            // family, which is never queried either.
+            .filter(|&ip| network_config.ip.allows(ip))
             .flat_map(|ip| {
                 // TODO: way around allocation?
                 let ech_config = ech_enabled.then(|| self.ech_config.clone()).flatten();
@@ -1691,24 +1694,15 @@ impl HappyEyeballs {
                     }
                     _ => None,
                 });
-            let mut bucket = info.flatten_into_endpoints(
+            let bucket = info.flatten_into_endpoints(
                 self.port,
                 ipv4_addrs,
                 ipv6_addrs,
-                &self.network_config.http_versions,
-                self.network_config.ech,
+                &self.network_config,
                 (self.network_config.resolution == ResolutionMode::ByNameWithHttpsRr)
                     .then(|| self.origin_host_str())
                     .flatten(),
             );
-            // The record's IP hints come from the DNS answer whatever the
-            // configured address family. On a single-stack network drop those
-            // of the disabled family, which is never queried either.
-            bucket.retain(|endpoint| {
-                endpoint
-                    .address()
-                    .is_none_or(|address| self.network_config.ip.allows(address.ip()))
-            });
             endpoints.extend(interleave_endpoints(bucket, prefer_v6));
         }
 
