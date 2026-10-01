@@ -6,11 +6,12 @@
 mod common;
 use common::*;
 
+use std::net::SocketAddr;
 use std::time::Instant;
 
 use happy_eyeballs::{
-    CONNECTION_ATTEMPT_DELAY, ConnectionAttemptHttpVersions, DnsRecordType, DnsResult,
-    FailureReason, HappyEyeballs, Id, Input, IpPreference, NetworkConfig, Output,
+    CONNECTION_ATTEMPT_DELAY, ConnectionAttemptHttpVersions, DnsRecordType, DnsResult, Endpoint,
+    EndpointTarget, FailureReason, HappyEyeballs, Id, Input, IpPreference, NetworkConfig, Output,
 };
 
 /// Dual-stack (the default), with the HTTPS query answered negative so the AAAA
@@ -411,6 +412,48 @@ fn failure_reported_after_refresh_also_fails() {
     // endpoint to try, so the state machine now reports the failure.
     he.input(in_dns_aaaa_positive(Id::from(4)), now);
     he.expect(Output::Failed(FailureReason::Connection), now);
+}
+
+/// A stale HTTPS answer that advertises ECH restricts the race to ECH endpoints.
+/// The revalidation answer takes preference over the stale one: when the
+/// operator has since removed ECH, the fresh answer lifts that restriction and
+/// the non-ECH endpoint joins the race.
+#[test]
+fn refresh_dropping_ech_takes_preference() {
+    let (mut now, mut he) = setup();
+    expect_initial_dns_queries(&mut he, now);
+
+    he.input(in_dns_https_stale_ech(Id::from(0)), now);
+    he.input(in_dns_aaaa_positive(Id::from(1)), now);
+    he.input(in_dns_a_negative(Id::from(2)), now);
+
+    // The stale answer is used at once, so the first attempt carries ECH, and
+    // the stale record is revalidated.
+    he.expect(
+        Output::AttemptConnection {
+            id: Id::from(3),
+            endpoint: Endpoint {
+                target: EndpointTarget::Address(SocketAddr::new(V6_ADDR.into(), PORT)),
+                http_version: ConnectionAttemptHttpVersions::H3,
+                ech_config: Some(ech_config()),
+            },
+            is_ech_retry: false,
+        },
+        now,
+    );
+    he.expect(
+        out_send_dns_refresh(Id::from(4), HOSTNAME, DnsRecordType::Https),
+        now,
+    );
+    he.expect(out_connection_attempt_delay(), now);
+
+    // The fresh answer no longer advertises ECH.
+    he.input(in_dns_https_positive(Id::from(4)), now);
+    he.expect(out_connection_attempt_delay(), now);
+
+    // Past the connection-attempt delay, the endpoint is raced without ECH.
+    now += CONNECTION_ATTEMPT_DELAY;
+    he.expect(out_attempt_v6_h3(Id::from(5)), now);
 }
 
 /// A revalidation that returns a negative answer removes the candidate; with the
