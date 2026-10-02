@@ -1307,7 +1307,7 @@ impl HappyEyeballs {
             .completed_service_infos()
             // When any ServiceInfo has ECH, skip resolving targets without ECH.
             .filter(move |i| !any_ech || i.ech_config.is_some())
-            .map(|i| &i.target_name);
+            .filter_map(|i| self.record_addr_name(i));
 
         // Next AAAA or A query, respecting single-stack preferences.
         let (target_name, record_type) = target_names
@@ -1321,10 +1321,10 @@ impl HappyEyeballs {
                 !self
                     .dns_queries
                     .iter()
-                    .any(|q| q.target_name == **tn && q.record_type == *rt)
+                    .any(|q| q.target_name.as_str() == *tn && q.record_type == *rt)
             })?;
 
-        let target_name = target_name.clone();
+        let target_name: TargetName = target_name.into();
         let id = self.id_generator.next_id();
         self.dns_queries.push(DnsQuery {
             id,
@@ -1660,12 +1660,13 @@ impl HappyEyeballs {
 
         let mut endpoints: Vec<Endpoint> = Vec::new();
         for info in &service_infos {
+            let addr_name = self.record_addr_name(info);
             let ipv4_addrs: Option<Result<&[Ipv4Addr], ()>> =
                 self.dns_queries.iter().find_map(|q| match &q.state {
                     DnsQueryState::Completed {
                         response: DnsResult::A(result),
                         ..
-                    } if q.target_name == info.target_name => {
+                    } if Some(q.target_name.as_str()) == addr_name => {
                         Some(result.as_deref().map_err(|_| ()))
                     }
                     _ => None,
@@ -1675,7 +1676,7 @@ impl HappyEyeballs {
                     DnsQueryState::Completed {
                         response: DnsResult::Aaaa(result),
                         ..
-                    } if q.target_name == info.target_name => {
+                    } if Some(q.target_name.as_str()) == addr_name => {
                         Some(result.as_deref().map_err(|_| ()))
                     }
                     _ => None,
@@ -1747,6 +1748,33 @@ impl HappyEyeballs {
                 _ => None,
             })
             .flatten()
+    }
+
+    /// The DNS name whose A/AAAA answers are `info`'s addresses, and which is
+    /// resolved for it.
+    ///
+    /// Normally the record's own target name. A ServiceMode record whose
+    /// TargetName is the root (".") instead denotes the owner name, which is the
+    /// origin, so the origin's A/AAAA answers already are this record's
+    /// addresses and no follow-up query is needed:
+    ///
+    /// > For ServiceMode SVCB RRs, if TargetName has the value ".", then the
+    /// > owner name of this record MUST be used as the effective TargetName.
+    ///
+    /// <https://www.rfc-editor.org/rfc/rfc9460#section-2.5.2>
+    ///
+    /// [`None`] for a root target when the origin is an IP literal, which has no
+    /// A/AAAA answers to find.
+    fn record_addr_name<'a>(&'a self, info: &'a ServiceInfo) -> Option<&'a str> {
+        let target = info.target_name.as_str();
+        // As in `flatten_into_endpoints`, the root is "." (or an empty name).
+        if target.trim_end_matches('.').is_empty() {
+            return match &self.host {
+                Host::Domain(domain) => Some(domain.as_str()),
+                Host::Ip(_) => None,
+            };
+        }
+        Some(target)
     }
 
     fn any_ech(&self) -> bool {
