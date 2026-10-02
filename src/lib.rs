@@ -205,6 +205,30 @@ impl Debug for TargetName {
     }
 }
 
+/// The port of the "https" scheme, whose HTTPS records carry no prefix labels.
+const HTTPS_DEFAULT_PORT: u16 = 443;
+
+/// The name under which the HTTPS record for `host` at `port` is published.
+///
+/// An HTTPS record is scoped to one port: the record for
+/// `https://example.com:8443` lives at `_8443._https.example.com`, so it cannot
+/// be confused with the record of whatever else the host serves on another
+/// port. Only port 443 uses the bare hostname.
+///
+/// > The HTTPS RR uses Port Prefix Naming (Section 2.3), with one modification:
+/// > if the scheme is "https" and the port is 443, then the client's original
+/// > QNAME is equal to the service name (i.e., the origin's hostname), without
+/// > any prefix labels.
+///
+/// <https://www.rfc-editor.org/rfc/rfc9460#section-9.1>
+fn https_query_name(host: &str, port: u16) -> TargetName {
+    if port == HTTPS_DEFAULT_PORT {
+        host.into()
+    } else {
+        TargetName(format!("_{port}._https.{host}"))
+    }
+}
+
 /// Output events from the Happy Eyeballs state machine
 #[derive(Debug, Clone, PartialEq)]
 #[must_use]
@@ -1276,16 +1300,23 @@ impl HappyEyeballs {
                 .any(|q| q.record_type == record_type)
             {
                 let id = self.id_generator.next_id();
+                // The HTTPS record is published per port, so a non-443 origin
+                // has to ask for the port-prefixed name. Address records are
+                // never prefixed.
+                let query_name = match record_type {
+                    DnsRecordType::Https => https_query_name(target_name.as_str(), self.port),
+                    DnsRecordType::Aaaa | DnsRecordType::A => target_name.clone(),
+                };
                 self.dns_queries.push(DnsQuery {
                     id,
-                    target_name: target_name.clone(),
+                    target_name: query_name.clone(),
                     record_type,
                     state: DnsQueryState::InProgress,
                     refresh: Refresh::Idle,
                 });
                 return Some(Output::SendDnsQuery {
                     id,
-                    hostname: target_name,
+                    hostname: query_name,
                     record_type,
                     allow_stale: true,
                 });
@@ -1942,6 +1973,10 @@ impl HappyEyeballs {
             }
         };
 
+        // The origin's HTTPS query carries the port-prefixed name on a non-443
+        // origin, so match on that rather than the bare hostname.
+        let https_name = https_query_name(hostname, self.port);
+
         // `ResolutionMode::ByNameWithHttpsRr` queries only the origin HTTPS
         // record and never any address, so there are no addresses to wait for:
         // move on once that HTTPS query has completed, whether its answer is
@@ -1951,7 +1986,7 @@ impl HappyEyeballs {
             return self
                 .dns_queries
                 .iter()
-                .filter(|q| q.target_name.as_str() == hostname)
+                .filter(|q| q.target_name == https_name)
                 .filter(|q| q.is_completed())
                 .any(|q| q.record_type == DnsRecordType::Https);
         }
@@ -1990,7 +2025,7 @@ impl HappyEyeballs {
         if !self
             .dns_queries
             .iter()
-            .filter(|q| q.target_name.as_str() == hostname)
+            .filter(|q| q.target_name == https_name)
             .filter(|q| q.is_completed())
             .any(|q| q.record_type == DnsRecordType::Https)
         {

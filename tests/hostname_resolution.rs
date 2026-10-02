@@ -15,6 +15,9 @@ use happy_eyeballs::{
     RESOLUTION_DELAY,
 };
 
+/// The origin's HTTPS record name when the origin is on [`CUSTOM_PORT`].
+const HTTPS_NAME_CUSTOM_PORT: &str = "_8443._https.example.com";
+
 fn expect_hints_move_on_with_timeout(
     he: &mut HappyEyeballs,
     now: &mut Instant,
@@ -50,6 +53,63 @@ fn sendig_dns_queries() {
     let (now, mut he) = setup();
 
     expect_initial_dns_queries(&mut he, now);
+}
+
+/// An HTTPS record is published per port, so the record for `example.com:8443`
+/// lives at `_8443._https.example.com`. Querying the bare origin name would
+/// read the record of whatever the host serves on port 443. Address records
+/// carry no prefix labels.
+///
+/// > The HTTPS RR uses Port Prefix Naming (Section 2.3), with one modification:
+/// > if the scheme is "https" and the port is 443, then the client's original
+/// > QNAME is equal to the service name (i.e., the origin's hostname), without
+/// > any prefix labels.
+///
+/// <https://www.rfc-editor.org/rfc/rfc9460#section-9.1>
+#[test]
+fn https_query_for_a_non_default_port_is_port_prefixed() {
+    let now = Instant::now();
+    let mut he = HappyEyeballs::new(HOSTNAME, CUSTOM_PORT).unwrap();
+
+    he.expect_all(
+        [
+            out_send_dns(Id::from(0), HTTPS_NAME_CUSTOM_PORT, DnsRecordType::Https),
+            out_send_dns(Id::from(1), HOSTNAME, DnsRecordType::Aaaa),
+            out_send_dns(Id::from(2), HOSTNAME, DnsRecordType::A),
+        ],
+        now,
+    );
+}
+
+/// The port-prefixed query is still the origin's HTTPS query, so its answer
+/// satisfies the SVCB/HTTPS half of the move-on condition and the first attempt
+/// goes out without waiting out the resolution delay.
+#[test]
+fn non_default_port_https_answer_satisfies_move_on() {
+    let now = Instant::now();
+    let mut he = HappyEyeballs::new(HOSTNAME, CUSTOM_PORT).unwrap();
+
+    he.expect_all(
+        [
+            out_send_dns(Id::from(0), HTTPS_NAME_CUSTOM_PORT, DnsRecordType::Https),
+            out_send_dns(Id::from(1), HOSTNAME, DnsRecordType::Aaaa),
+            out_send_dns(Id::from(2), HOSTNAME, DnsRecordType::A),
+        ],
+        now,
+    );
+
+    he.input(in_dns_https_negative(Id::from(0)), now);
+    he.input(in_dns_aaaa_positive(Id::from(1)), now);
+
+    he.expect(
+        out_attempt(
+            Id::from(3),
+            V6_ADDR.into(),
+            CUSTOM_PORT,
+            ConnectionAttemptHttpVersions::H2OrH1,
+        ),
+        now,
+    );
 }
 
 /// > Implementations SHOULD NOT wait for all answers to return before
