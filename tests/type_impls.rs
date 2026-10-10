@@ -2,8 +2,21 @@ mod common;
 use common::*;
 
 use happy_eyeballs::{
-    ConnectionResult, EchConfig, HttpVersion, Id, Input, ServiceInfo, TargetName,
+    ConnectionResult, EchConfig, HttpVersion, HttpVersions, Id, Input, ServiceInfo, TargetName,
 };
+
+/// The bitmask an FFI caller can pass, guaranteed by `repr = "u8"`.
+#[test]
+fn http_versions_repr() {
+    assert_eq!(size_of::<HttpVersions>(), 1);
+    assert_eq!(HttpVersions::ALL.as_repr(), 0b111);
+    assert_eq!(HttpVersions::only(HttpVersion::H3).as_repr(), 0b001);
+    assert_eq!(HttpVersions::only(HttpVersion::H2).as_repr(), 0b010);
+    assert_eq!(HttpVersions::only(HttpVersion::H1).as_repr(), 0b100);
+    assert_eq!(HttpVersions::try_from_repr(0b111), Some(HttpVersions::ALL));
+    // Foreign bits are rejected, not panicked on.
+    assert_eq!(HttpVersions::try_from_repr(0b1000), None);
+}
 
 #[test]
 fn id_roundtrip() {
@@ -30,7 +43,7 @@ fn service_info_debug() {
     let full = ServiceInfo {
         priority: 1,
         target_name: HOSTNAME.into(),
-        alpn_http_versions: [HttpVersion::H3].into(),
+        alpn_http_versions: HttpVersion::H3.into(),
         ech_config: Some(ech_config()),
         ipv4_hints: vec![V4_ADDR],
         ipv6_hints: vec![V6_ADDR],
@@ -43,7 +56,7 @@ fn service_info_debug() {
 
     // With optional fields empty: conditional fields must not appear.
     let bare = ServiceInfo {
-        alpn_http_versions: Default::default(),
+        alpn_http_versions: HttpVersions::EMPTY,
         ech_config: None,
         ipv4_hints: vec![],
         ipv6_hints: vec![],
