@@ -11,4 +11,13 @@ thiserror = { version = "2.0.12", default-features = false }
 url = { version = "2.5.7", default-features = false }
 
 [dev-dependencies]
+criterion = { version = "5", package = "codspeed-criterion-compat", default-features = false }
 env_logger = { version = "0.10", default-features = false }
+
+[lib]
+# See https://github.com/bheisler/criterion.rs/blob/master/book/src/faq.md#cargo-bench-gives-unrecognized-option-errors-for-valid-command-line-options
+bench = false
+
+[[bench]]
+name = "state_machine"
+harness = false
