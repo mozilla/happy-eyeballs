@@ -329,6 +329,34 @@ fn alt_svc_host_ip_literal() {
     );
 }
 
+/// On a single-stack network, an alt-svc host that is an IP literal of the
+/// disabled address family is not attempted: only the origin fallback is.
+#[test]
+fn alt_svc_host_ip_literal_of_disabled_family() {
+    let config = NetworkConfig {
+        ip: IpPreference::Ipv4Only,
+        alt_svc: vec![AltSvc {
+            host: Some(V6_ADDR_2.to_string()),
+            port: Some(CUSTOM_PORT),
+            http_version: HttpVersion::H3,
+        }],
+        ..NetworkConfig::default()
+    };
+    let (mut now, mut he) = setup_with_config(config);
+
+    he.expect(out_send_dns_https(Id::from(0)), now);
+    he.expect(out_send_dns_a(Id::from(1)), now);
+    he.expect_idle(now);
+
+    he.input(in_dns_a_positive(Id::from(1)), now);
+    he.expect(out_resolution_delay(), now);
+    he.input(in_dns_https_negative(Id::from(0)), now);
+
+    he.expect(out_attempt_v4_h1_h2(Id::from(2)), now);
+    he.expect(out_connection_attempt_delay(), now);
+    he.expect_connection_attempts([], &mut now);
+}
+
 /// An IP-literal origin combined with an alt-svc host that is a domain: the
 /// origin IP is attempted immediately while the alt-svc host is resolved in the
 /// background and attempted once its addresses arrive.
