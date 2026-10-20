@@ -156,46 +156,57 @@ fn stale_https_record_is_refreshed() {
 
     he.input(in_dns_https_stale_v6_hints(Id::from(0)), now);
 
-    // The stale HTTPS record is revalidated. AAAA and A for the origin are still
-    // in flight, so the machine waits out the resolution delay before using the
-    // hint.
+    // The stale record's v6 hint is raced right away, and the record is
+    // revalidated.
+    he.expect(out_attempt_v6_h3(Id::from(3)), now);
     he.expect(
-        out_send_dns_refresh(Id::from(3), HOSTNAME, DnsRecordType::Https),
+        out_send_dns_refresh(Id::from(4), HOSTNAME, DnsRecordType::Https),
         now,
     );
-    he.expect(out_resolution_delay(), now);
+    he.expect(out_connection_attempt_delay(), now);
 }
 
 /// A stale answer for a follow-up TargetName query (named by an HTTPS record) is
 /// revalidated as well.
 #[test]
 fn stale_target_name_record_is_refreshed() {
-    let (now, mut he) = setup();
+    let (mut now, mut he) = setup();
     expect_initial_dns_queries(&mut he, now);
 
-    // HTTPS names SVC1; the machine queries SVC1's AAAA and A.
+    // HTTPS names SVC1; the machine races its v6 hint and queries SVC1's AAAA
+    // and A.
     he.input(in_dns_https_positive_svc1(Id::from(0)), now);
-    he.expect(out_send_dns(Id::from(3), SVC1, DnsRecordType::Aaaa), now);
-    he.expect(out_send_dns(Id::from(4), SVC1, DnsRecordType::A), now);
-    he.expect(out_resolution_delay(), now);
-
-    // SVC1's AAAA comes back stale: it is raced (H3 from the record's ALPN) and
-    // revalidated for SVC1.
-    he.input(in_dns_aaaa_stale(Id::from(3)), now);
     he.expect(
         out_attempt(
-            Id::from(5),
+            Id::from(3),
+            V6_ADDR_2.into(),
+            PORT,
+            ConnectionAttemptHttpVersions::H3,
+        ),
+        now,
+    );
+    he.expect(out_send_dns(Id::from(4), SVC1, DnsRecordType::Aaaa), now);
+    he.expect(out_send_dns(Id::from(5), SVC1, DnsRecordType::A), now);
+    he.expect(out_connection_attempt_delay(), now);
+
+    // SVC1's AAAA comes back stale: it is revalidated for SVC1 and raced (H3
+    // from the record's ALPN) once the connection attempt delay has passed.
+    he.input(in_dns_aaaa_stale(Id::from(4)), now);
+    he.expect(
+        out_send_dns_refresh(Id::from(6), SVC1, DnsRecordType::Aaaa),
+        now,
+    );
+    he.expect(out_connection_attempt_delay(), now);
+    now += CONNECTION_ATTEMPT_DELAY;
+    he.expect(
+        out_attempt(
+            Id::from(7),
             V6_ADDR.into(),
             PORT,
             ConnectionAttemptHttpVersions::H3,
         ),
         now,
     );
-    he.expect(
-        out_send_dns_refresh(Id::from(6), SVC1, DnsRecordType::Aaaa),
-        now,
-    );
-    he.expect(out_connection_attempt_delay(), now);
 }
 
 /// Optimistic refresh also works on a single-stack (IPv4-only) network.

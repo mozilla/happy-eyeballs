@@ -2009,12 +2009,21 @@ impl HappyEyeballs {
         // Skipped when `wait_for_preferred_address` is disabled, letting the
         // state machine move on with the non-preferred family rather than
         // waiting out the resolution delay for the preferred one.
+        //
+        // An HTTPS record hint of the preferred family also counts:
+        //
+        // > When these are received, they SHOULD be considered as positive
+        // > non-empty answers for the purpose of the algorithm when A and AAAA
+        // > records corresponding to the TargetName are not available yet.
+        //
+        // <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4.2.1>
         if self.network_config.wait_for_preferred_address
             && !self
                 .dns_queries
                 .iter()
                 .filter(|q| q.is_completed())
                 .any(|q| q.record_type == self.network_config.preferred_dns_record_type())
+            && !self.has_preferred_family_hint()
         {
             return false;
         }
@@ -2033,6 +2042,19 @@ impl HappyEyeballs {
         }
 
         true
+    }
+
+    /// Whether a completed HTTPS record carries an IP hint of the preferred
+    /// address family.
+    fn has_preferred_family_hint(&self) -> bool {
+        let prefer_v6 = self.network_config.prefer_v6();
+        self.completed_service_infos().any(|i| {
+            if prefer_v6 {
+                !i.ipv6_hints.is_empty()
+            } else {
+                !i.ipv4_hints.is_empty()
+            }
+        })
     }
 
     /// Whether to move on to the connection attempt phase based on a timeout.
