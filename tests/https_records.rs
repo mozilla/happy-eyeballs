@@ -1701,3 +1701,137 @@ fn rfc_multi_cdn_target_names_resolved_and_attempted() {
         &mut now,
     );
 }
+
+/// A ServiceMode record whose TargetName is the root (".") denotes the owner
+/// name, i.e. the origin, so the origin's own A/AAAA answers are the record's
+/// addresses: no follow-up query for "." goes out, and the record's ALPN and ECH
+/// config apply to the resolved origin addresses.
+///
+/// <https://www.rfc-editor.org/rfc/rfc9460#section-2.5.2>
+///
+/// ```dns
+/// example.com  HTTPS  1 . alpn="h3" ech=...
+/// example.com  AAAA   2001:db8::1
+/// example.com  A      192.0.2.1
+/// ```
+///
+/// Expected connection attempts (ECH suppresses the origin fallback):
+///   V6:H3+ech, V4:H3+ech
+#[test]
+fn root_target_name_resolves_to_origin() {
+    let (mut now, mut he) = setup();
+
+    expect_initial_dns_queries(&mut he, now);
+    he.input(
+        Input::DnsResult {
+            id: Id::from(0),
+            result: DnsResult::Https(Ok(vec![service_info(1, ".", &[HttpVersion::H3]).ech()])),
+            stale: false,
+        },
+        now,
+    );
+    // The origin's AAAA and A queries already cover the root target, so no
+    // query for "." is emitted.
+    he.expect(out_resolution_delay(), now);
+
+    he.input(in_dns_aaaa_positive(Id::from(1)), now);
+    he.expect(
+        Output::AttemptConnection {
+            id: Id::from(3),
+            endpoint: Endpoint {
+                target: EndpointTarget::Address(SocketAddr::new(V6_ADDR.into(), PORT)),
+                http_version: ConnectionAttemptHttpVersions::H3,
+                ech_config: Some(ech_config()),
+            },
+            is_ech_retry: false,
+        },
+        now,
+    );
+    he.expect(out_connection_attempt_delay(), now);
+    he.input(in_dns_a_positive(Id::from(2)), now);
+    he.expect(out_connection_attempt_delay(), now);
+
+    he.expect_connection_attempts(
+        [Output::AttemptConnection {
+            id: Id::from(4),
+            endpoint: Endpoint {
+                target: EndpointTarget::Address(SocketAddr::new(V4_ADDR.into(), PORT)),
+                http_version: ConnectionAttemptHttpVersions::H3,
+                ech_config: Some(ech_config()),
+            },
+            is_ech_retry: false,
+        }],
+        &mut now,
+    );
+}
+
+/// A root-target record's IP hints stay a fallback: the origin's resolved
+/// addresses are tried first over the record's ALPN, then the hints, then the
+/// origin fallback.
+///
+/// ```dns
+/// example.com  HTTPS  1 . alpn="h3" ipv6hint=2001:db8::2 ipv4hint=192.0.2.2
+/// example.com  AAAA   2001:db8::1
+/// example.com  A      192.0.2.1
+/// ```
+#[test]
+fn root_target_hints_follow_origin_addresses() {
+    let (mut now, mut he) = setup();
+
+    expect_initial_dns_queries(&mut he, now);
+    he.input(
+        Input::DnsResult {
+            id: Id::from(0),
+            result: DnsResult::Https(Ok(vec![
+                service_info(1, ".", &[HttpVersion::H3])
+                    .ipv6_hints(vec![V6_ADDR_2])
+                    .ipv4_hints(vec![V4_ADDR_2]),
+            ])),
+            stale: false,
+        },
+        now,
+    );
+    he.expect(out_resolution_delay(), now);
+
+    he.input(in_dns_aaaa_positive(Id::from(1)), now);
+    he.expect(
+        out_attempt(
+            Id::from(3),
+            V6_ADDR.into(),
+            PORT,
+            ConnectionAttemptHttpVersions::H3,
+        ),
+        now,
+    );
+    he.expect(out_connection_attempt_delay(), now);
+    he.input(in_dns_a_positive(Id::from(2)), now);
+    he.expect(out_connection_attempt_delay(), now);
+
+    he.expect_connection_attempts(
+        [
+            out_attempt(
+                Id::from(4),
+                V4_ADDR.into(),
+                PORT,
+                ConnectionAttemptHttpVersions::H3,
+            ),
+            // The record's hints come after the origin's resolved addresses.
+            out_attempt(
+                Id::from(5),
+                V6_ADDR_2.into(),
+                PORT,
+                ConnectionAttemptHttpVersions::H3,
+            ),
+            out_attempt(
+                Id::from(6),
+                V4_ADDR_2.into(),
+                PORT,
+                ConnectionAttemptHttpVersions::H3,
+            ),
+            // Origin fallback last.
+            out_attempt_v6_h1_h2(Id::from(7)),
+            out_attempt_v4_h1_h2(Id::from(8)),
+        ],
+        &mut now,
+    );
+}
