@@ -53,8 +53,8 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::num::NonZeroU32;
 use std::time::{Duration, Instant};
 
-use log::trace;
 use thiserror::Error;
+use tracing::{debug, trace};
 use url::Host as UrlHost;
 
 mod id;
@@ -1488,7 +1488,7 @@ impl HappyEyeballs {
         match attempt.state {
             ConnectionState::InProgress => {}
             ConnectionState::Cancelled => {
-                log::debug!("ignoring connection result for cancelled attempt {id:?}: {result:?}");
+                debug!("ignoring connection result for cancelled attempt {id:?}: {result:?}");
                 return;
             }
             ConnectionState::Succeeded | ConnectionState::Failed => {
@@ -1529,7 +1529,7 @@ impl HappyEyeballs {
                 //
                 // https://datatracker.ietf.org/doc/html/rfc9849#section-6.1.6
                 if attempt.is_ech_retry {
-                    log::debug!("ignoring EchRetry on attempt {id:?} that is itself an ECH retry");
+                    debug!("ignoring EchRetry on attempt {id:?} that is itself an ECH retry");
                     return;
                 }
 

@@ -510,7 +510,19 @@ pub fn setup() -> (Instant, HappyEyeballs) {
 }
 
 pub fn setup_with_config(config: NetworkConfig) -> (Instant, HappyEyeballs) {
-    let _ = env_logger::builder().is_test(true).try_init();
+    use tracing_subscriber::{
+        filter::{LevelFilter, Targets},
+        prelude::*,
+    };
+
+    let targets = std::env::var("RUST_LOG")
+        .ok()
+        .and_then(|directives| directives.parse::<Targets>().ok())
+        .unwrap_or_else(|| Targets::new().with_default(LevelFilter::ERROR));
+    let _ = tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer().with_test_writer())
+        .with(targets)
+        .try_init();
     let now = Instant::now();
     let he = HappyEyeballs::new_with_network_config(HOSTNAME, PORT, config).unwrap();
     (now, he)
