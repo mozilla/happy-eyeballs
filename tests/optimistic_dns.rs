@@ -3,6 +3,8 @@
 //!
 //! <https://datatracker.ietf.org/doc/draft-gakiwate-dnsop-optimistic-dns/>
 //! <https://github.com/mozilla/happy-eyeballs/issues/125>
+#![allow(clippy::disallowed_methods, reason = "tests may use Instant::now")]
+
 mod common;
 use common::*;
 
@@ -166,7 +168,7 @@ fn stale_https_record_is_refreshed() {
     he.expect(out_resolution_delay(), now);
 }
 
-/// A stale answer for a follow-up TargetName query (named by an HTTPS record) is
+/// A stale answer for a follow-up `TargetName` query (named by an HTTPS record) is
 /// revalidated as well.
 #[test]
 fn stale_target_name_record_is_refreshed() {

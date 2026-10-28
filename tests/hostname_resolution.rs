@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_methods, reason = "tests may use Instant::now")]
+
 /// > 4. Hostname Resolution
 ///
 /// <https://www.ietf.org/archive/id/draft-ietf-happy-happyeyeballs-v3-02.html#section-4>
@@ -501,7 +503,7 @@ fn https_h3_upgrade_without_hints() {
     he.expect(out_attempt_v6_h3(Id::from(3)), now);
 }
 
-/// A ServiceInfo advertising H3 must not produce an H3 connection attempt
+/// A `ServiceInfo` advertising H3 must not produce an H3 connection attempt
 /// when H3 is disabled in the network config.
 #[test]
 fn https_h3_disabled() {
