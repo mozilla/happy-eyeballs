@@ -1,5 +1,7 @@
-/// Tests for HTTPS/SVCB DNS record handling including ECH, port SvcParams,
-/// multiple ServiceInfo records, and SVC1 target name resolution.
+#![allow(clippy::disallowed_methods, reason = "tests may use Instant::now")]
+
+/// Tests for HTTPS/SVCB DNS record handling including ECH, port `SvcParams`,
+/// multiple `ServiceInfo` records, and SVC1 target name resolution.
 mod common;
 use common::*;
 
@@ -194,7 +196,7 @@ fn hints_kept_as_fallback_after_address_records() {
 ///
 /// AAAA resolves to `V6_ADDR` and the record's v6 hint is that same `V6_ADDR`.
 /// Only one `V6_ADDR`/H2 attempt is made (the hint copy is skipped), followed
-/// by the origin fallback at H2OrH1.
+/// by the origin fallback at `H2OrH1`.
 #[test]
 fn hint_equal_to_resolved_address_is_not_attempted_twice() {
     let (mut now, mut he) = setup();
@@ -360,8 +362,8 @@ fn multiple_target_names() {
     );
 }
 
-/// Two HTTPS ServiceInfo records where only the first has ECH config ("partial ECH").
-/// When any ServiceInfo has ECH, those without ECH are skipped.
+/// Two HTTPS `ServiceInfo` records where only the first has ECH config ("partial ECH").
+/// When any `ServiceInfo` has ECH, those without ECH are skipped.
 /// The origin fallback is also skipped.
 ///
 /// ```dns
@@ -369,12 +371,12 @@ fn multiple_target_names() {
 /// test.partial_ech.org  HTTPS  2 svc2.example.com. alpn="h2" port=10443
 /// ```
 ///
-/// HOSTNAME resolves AAAA to V6_ADDR and A to V4_ADDR.
-/// SVC1 resolves A to V4_ADDR_2. SVC2 DNS is never queried (no ECH).
+/// HOSTNAME resolves AAAA to `V6_ADDR` and A to `V4_ADDR`.
+/// SVC1 resolves A to `V4_ADDR_2`. SVC2 DNS is never queried (no ECH).
 ///
-/// Only the ECH-enabled ServiceInfo produces connection attempts:
+/// Only the ECH-enabled `ServiceInfo` produces connection attempts:
 ///
-///   priority-1 bucket (SVC1, port 9443, ech): V4_2:H3 (alpn=h3 only)
+///   priority-1 bucket (SVC1, port 9443, ech): `V4_2:H3` (alpn=h3 only)
 ///   priority-2 bucket (SVC2, port 10443):     skipped (no ECH, not even resolved)
 ///   fallback   bucket (HOSTNAME):             skipped (no ECH)
 #[test]
@@ -437,7 +439,7 @@ fn partial_ech_two_service_infos() {
     he.expect_idle(now);
 }
 
-/// Both ServiceInfo records have ECH. The origin fallback is still skipped
+/// Both `ServiceInfo` records have ECH. The origin fallback is still skipped
 /// because it has no ECH config.
 ///
 /// ```dns
@@ -445,10 +447,10 @@ fn partial_ech_two_service_infos() {
 /// example.com  HTTPS  2 svc2.example.com. alpn="h2" port=10443 ech="..."
 /// ```
 ///
-/// HOSTNAME resolves AAAA to V6_ADDR and A to V4_ADDR.
-/// SVC1 resolves A to V4_ADDR_2. SVC2 resolves A to V4_ADDR.
+/// HOSTNAME resolves AAAA to `V6_ADDR` and A to `V4_ADDR`.
+/// SVC1 resolves A to `V4_ADDR_2`. SVC2 resolves A to `V4_ADDR`.
 ///
-///   priority-1 bucket (SVC1, port 9443, ech):  V4_2:H3 (alpn=h3 only)
+///   priority-1 bucket (SVC1, port 9443, ech):  `V4_2:H3` (alpn=h3 only)
 ///   priority-2 bucket (SVC2, port 10443, ech): V4:H2 (alpn=h2 only)
 ///   fallback   bucket (HOSTNAME):              skipped (no ECH)
 #[test]
@@ -544,7 +546,7 @@ fn both_service_infos_have_ech_no_origin_fallback() {
 /// the priority-1 target is h3-only, the priority-2 target is h2-only. Each
 /// target's resolved addresses must be attempted with that record's own ALPN,
 /// never the union of ALPNs across records. The origin fallback uses the
-/// default H2OrH1.
+/// default `H2OrH1`.
 ///
 /// ```dns
 /// example.com       HTTPS 1 svc1.example.com. alpn="h3"
@@ -555,8 +557,8 @@ fn both_service_infos_have_ech_no_origin_fallback() {
 /// ```
 ///
 /// Expected attempts:
-///   priority-1 bucket (svc1): V6_2:H3   (alpn=h3 only, no H2)
-///   priority-2 bucket (svc2): V6_3:H2   (alpn=h2 only, no H3)
+///   priority-1 bucket (svc1): `V6_2:H3`   (alpn=h3 only, no H2)
+///   priority-2 bucket (svc2): `V6_3:H2`   (alpn=h2 only, no H3)
 ///   fallback   bucket:        V6:H2OrH1 (origin default)
 #[test]
 fn per_record_alpn_not_unioned_across_records() {
@@ -641,7 +643,7 @@ fn per_record_alpn_not_unioned_across_records() {
     );
 }
 
-/// A ServiceMode record with no ALPN carries no usable protocol. Assembling the
+/// A `ServiceMode` record with no ALPN carries no usable protocol. Assembling the
 /// SVCB ALPN set -- including adding the scheme default ("http/1.1") when no
 /// "alpn" is present -- is the caller's responsibility per RFC 9460 Section
 /// 7.1.1, so such a record contributes no endpoints here, and in particular it
@@ -657,7 +659,7 @@ fn per_record_alpn_not_unioned_across_records() {
 /// ```
 ///
 /// Expected attempts:
-///   priority-1 bucket (svc1): V6_2:H3   (alpn=h3)
+///   priority-1 bucket (svc1): `V6_2:H3`   (alpn=h3)
 ///   priority-2 bucket (svc2): none      (no alpn -> no usable protocol)
 ///   fallback   bucket:        V6:H2OrH1 (origin default)
 #[test]
@@ -741,10 +743,10 @@ fn record_without_alpn_contributes_no_endpoints() {
 /// ```
 /// Alt-svc: h3 on port 8443
 ///
-/// HOSTNAME resolves AAAA to V6_ADDR and A to V4_ADDR.
-/// SVC1 resolves A to V4_ADDR_2.
+/// HOSTNAME resolves AAAA to `V6_ADDR` and A to `V4_ADDR`.
+/// SVC1 resolves A to `V4_ADDR_2`.
 ///
-///   priority-1 bucket (SVC1, port 9443, ech): V4_2:H3 (alpn=h3 only)
+///   priority-1 bucket (SVC1, port 9443, ech): `V4_2:H3` (alpn=h3 only)
 ///   priority-2 bucket (SVC2, port 10443):     skipped (no ECH, not resolved)
 ///   alt-svc    bucket (port 8443):            skipped (no ECH)
 ///   fallback   bucket (HOSTNAME, port 443):   skipped (no ECH)
@@ -850,7 +852,7 @@ mod https_port_svcparam_overrides_port_for {
         check(vec![]);
     }
 
-    /// HTTPS record with both IPv4 and IPv6 hints and a `port` SvcParam: both
+    /// HTTPS record with both IPv4 and IPv6 hints and a `port` `SvcParam`: both
     /// families use the overridden port.
     #[test]
     fn v4_and_v6_hints() {
@@ -933,7 +935,7 @@ fn https_port_svcparam_applies_but_fallbacks_follow() {
     );
 }
 
-/// Two HTTPS ServiceInfo records with different priorities and `port` SvcParams.
+/// Two HTTPS `ServiceInfo` records with different priorities and `port` `SvcParams`.
 ///
 /// ```dns
 /// example.com  HTTPS  1 . alpn="h2,h3" port=20007
@@ -1228,7 +1230,7 @@ fn https_port_takes_precedence_over_alt_svc_port() {
 /// ```
 ///
 /// Expected connection attempts:
-///   SVC1 bucket (priority 1): V6_ADDR_2:H3, V4_ADDR_2:H3
+///   SVC1 bucket (priority 1): `V6_ADDR_2:H3`, `V4_ADDR_2:H3`
 ///   fallback bucket (origin): V6:H2OrH1,    V4:H2OrH1
 ///
 /// <https://github.com/mozilla/happy-eyeballs/issues/10>
@@ -1310,7 +1312,7 @@ fn target_name_redirect_addresses_used_in_connection_attempts() {
 
 /// HTTPS record with `alpn="h3"` and `port=8443`. The HTTPS bucket should use
 /// H3 at port 8443, but the fallback bucket (origin domain, authority port)
-/// must use the default HTTP versions (H2OrH1), not H3 which came from the
+/// must use the default HTTP versions (`H2OrH1`), not H3 which came from the
 /// HTTPS record.
 ///
 /// ```dns
@@ -1355,7 +1357,7 @@ fn https_fallback_uses_default_http_versions() {
 /// Setup:
 ///   HTTPS record with ECH config, AAAA positive.
 ///   First connection attempt uses original ECH config.
-///   Server rejects ECH and provides retry_configs.
+///   Server rejects ECH and provides `retry_configs`.
 ///   State machine emits a new attempt with updated ECH config.
 #[test]
 fn ech_retry_same_endpoint() {
@@ -1407,7 +1409,7 @@ fn ech_retry_same_endpoint() {
             endpoint: Endpoint {
                 target: EndpointTarget::Address(SocketAddr::new(V6_ADDR.into(), PORT)),
                 http_version: ConnectionAttemptHttpVersions::H2,
-                ech_config: Some(new_ech_config.clone()),
+                ech_config: Some(new_ech_config),
             },
             is_ech_retry: true,
         },
@@ -1415,7 +1417,7 @@ fn ech_retry_same_endpoint() {
     );
 }
 
-/// `EchRetry` with an empty `EchConfig` models the SSL_ERROR_ECH_RETRY_WITHOUT_ECH
+/// `EchRetry` with an empty `EchConfig` models the `SSL_ERROR_ECH_RETRY_WITHOUT_ECH`
 /// path on the consumer side (server told us to retry *without* ECH). The state
 /// machine forwards the bytes verbatim, but the retry attempt must still be
 /// flagged `is_ech_retry: true` so consumers can label it.
@@ -1464,7 +1466,7 @@ fn ech_retry_without_ech_sets_flag() {
             endpoint: Endpoint {
                 target: EndpointTarget::Address(SocketAddr::new(V6_ADDR.into(), PORT)),
                 http_version: ConnectionAttemptHttpVersions::H2,
-                ech_config: Some(empty_ech_config.clone()),
+                ech_config: Some(empty_ech_config),
             },
             is_ech_retry: true,
         },
@@ -1526,7 +1528,7 @@ fn ech_retry_no_infinite_loop() {
             endpoint: Endpoint {
                 target: EndpointTarget::Address(SocketAddr::new(V6_ADDR.into(), PORT)),
                 http_version: ConnectionAttemptHttpVersions::H2,
-                ech_config: Some(retry_ech_config.clone()),
+                ech_config: Some(retry_ech_config),
             },
             is_ech_retry: true,
         },
@@ -1583,6 +1585,7 @@ fn ech_retry_no_infinite_loop() {
 /// attempt order: the priority-1 pool (`h3pool`), then the priority-2 pool
 /// (`cdn1`), then the origin fallback last.
 #[test]
+#[expect(clippy::too_many_lines, reason = "one end-to-end scenario")]
 fn rfc_multi_cdn_target_names_resolved_and_attempted() {
     const H3POOL: &str = "h3pool.svc1.example.";
     const CDN1: &str = "cdn1.svc1.example.";

@@ -1,3 +1,5 @@
+#![allow(clippy::disallowed_methods, reason = "tests may use Instant::now")]
+
 mod common;
 use common::*;
 
@@ -138,8 +140,8 @@ fn alt_svc_with_port() {
 /// endpoints should be attempted at both the alt-svc port and the origin port.
 ///
 /// Expected endpoint order:
-///   alt-svc bucket  (port 8443): V4_ADDR:H3
-///   fallback bucket (port  443): V4_ADDR:H2OrH1
+///   alt-svc bucket  (port 8443): `V4_ADDR:H3`
+///   fallback bucket (port  443): `V4_ADDR:H2OrH1`
 #[test]
 fn ip_host_alt_svc_with_port() {
     let mut now = Instant::now();
@@ -185,8 +187,8 @@ fn ip_host_alt_svc_with_port() {
 /// ahead of the plain origin fallback.
 ///
 /// Expected endpoint order:
-///   alt-svc host bucket (ALT_HOST, port 8443): V6_ADDR_2:H3, V4_ADDR_2:H3
-///   fallback bucket     (HOSTNAME, port  443): V6_ADDR:H2OrH1, V4_ADDR:H2OrH1
+///   alt-svc host bucket (`ALT_HOST`, port 8443): `V6_ADDR_2:H3`, `V4_ADDR_2:H3`
+///   fallback bucket     (HOSTNAME, port  443): `V6_ADDR:H2OrH1`, `V4_ADDR:H2OrH1`
 #[test]
 fn alt_svc_with_host() {
     const ALT_HOST: &str = "alt.example.com";
@@ -641,7 +643,7 @@ fn assert_alt_svc_version_disabled(
         PORT,
         alt_svc_disabled_config(version),
     )
-    .unwrap();
+    .expect("valid host");
     he.expect(
         out_attempt(Id::from(0), V4_ADDR.into(), PORT, expected_fallback),
         now,
@@ -664,7 +666,7 @@ fn alt_svc_h1_disabled() {
 /// the QUIC/IPv6 attempts must not be exhausted before IPv4 (a different
 /// address family) or TCP (a different protocol variant) alternatives are
 /// tried. The round-robin deals one endpoint from each group per round:
-///   V6:H3, V4:H3, V6:H2OrH1, V4:H2OrH1, V6_2:H3, V6_2:H2OrH1, V6_3:H3, V6_3:H2OrH1
+///   V6:H3, V4:H3, V6:H2OrH1, V4:H2OrH1, `V6_2:H3`, `V6_2:H2OrH1`, `V6_3:H3`, `V6_3:H2OrH1`
 #[test]
 fn interleaves_protocol_variants_and_address_families() {
     let config = NetworkConfig {
@@ -740,7 +742,7 @@ fn interleaves_protocol_variants_and_address_families() {
 
 /// Same interleaving with IPv4 preferred: the preferred family flips, so every
 /// round leads with IPv4 instead of IPv6.
-///   V4:H3, V6:H3, V4:H2OrH1, V6:H2OrH1, V4_2:H3, V4_2:H2OrH1
+///   V4:H3, V6:H3, V4:H2OrH1, V6:H2OrH1, `V4_2:H3`, `V4_2:H2OrH1`
 #[test]
 fn interleaves_with_ipv4_preferred() {
     let config = NetworkConfig {
