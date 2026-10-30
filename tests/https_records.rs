@@ -10,16 +10,16 @@ use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use happy_eyeballs::{
     AltSvc, CONNECTION_ATTEMPT_DELAY, ConnectionAttemptHttpVersions, ConnectionResult,
     DnsRecordType, DnsResult, EchConfig, Endpoint, EndpointTarget, FailureReason, HttpVersion, Id,
-    Input, IpPreference, NetworkConfig, Output, RESOLUTION_DELAY,
+    Input, IpPreference, NetworkConfig, Output,
 };
 
 #[test]
 fn ech_config_propagated_to_endpoint() {
-    let (mut now, mut he) = setup();
+    let (now, mut he) = setup();
 
     // HTTPS arrives with an ECH config and a v6 hint while AAAA and A are
-    // still in-flight. After the resolution delay the hint is used, and the
-    // ECH config must be carried onto the endpoint.
+    // still in-flight. The hint is used right away, and the ECH config must be
+    // carried onto the endpoint.
     expect_initial_dns_queries(&mut he, now);
     he.input(
         Input::DnsResult {
@@ -33,9 +33,6 @@ fn ech_config_propagated_to_endpoint() {
         },
         now,
     );
-    he.expect(out_resolution_delay(), now);
-
-    now += RESOLUTION_DELAY;
     he.expect(
         Output::AttemptConnection {
             id: Id::from(3),
@@ -142,13 +139,16 @@ fn hints_kept_as_fallback_on_negative_answer() {
 /// the hint is tried after them as a fallback, rather than the hint being
 /// dropped.
 ///
-/// AAAA resolves to `V6_ADDR`, while the HTTPS record advertises a different v6
-/// hint (`V6_ADDR_2`). Expect the real address first, then the hint.
+/// AAAA resolves to `V6_ADDR`, then the HTTPS record arrives advertising a
+/// different v6 hint (`V6_ADDR_2`). Expect the real address first, then the
+/// hint.
 #[test]
 fn hints_kept_as_fallback_after_address_records() {
     let (mut now, mut he) = setup();
 
     expect_initial_dns_queries(&mut he, now);
+    he.input(in_dns_aaaa_positive(Id::from(1)), now);
+    he.expect(out_resolution_delay(), now);
     he.input(
         Input::DnsResult {
             id: Id::from(0),
@@ -159,10 +159,6 @@ fn hints_kept_as_fallback_after_address_records() {
         },
         now,
     );
-    he.expect(out_resolution_delay(), now);
-
-    // The real AAAA answer arrives with an address distinct from the hint.
-    he.input(in_dns_aaaa_positive(Id::from(1)), now);
 
     // The real address is attempted first.
     he.expect(
@@ -194,7 +190,8 @@ fn hints_kept_as_fallback_after_address_records() {
 /// `already_attempted` check in `connection_attempt`), so the address is not
 /// connected to twice.
 ///
-/// AAAA resolves to `V6_ADDR` and the record's v6 hint is that same `V6_ADDR`.
+/// AAAA resolves to `V6_ADDR`, then the HTTPS record arrives with that same
+/// `V6_ADDR` as its v6 hint.
 /// Only one `V6_ADDR`/H2 attempt is made (the hint copy is skipped), followed
 /// by the origin fallback at `H2OrH1`.
 #[test]
@@ -202,6 +199,8 @@ fn hint_equal_to_resolved_address_is_not_attempted_twice() {
     let (mut now, mut he) = setup();
 
     expect_initial_dns_queries(&mut he, now);
+    he.input(in_dns_aaaa_positive(Id::from(1)), now);
+    he.expect(out_resolution_delay(), now);
     he.input(
         Input::DnsResult {
             id: Id::from(0),
@@ -212,10 +211,6 @@ fn hint_equal_to_resolved_address_is_not_attempted_twice() {
         },
         now,
     );
-    he.expect(out_resolution_delay(), now);
-
-    // AAAA resolves to the same address as the hint.
-    he.input(in_dns_aaaa_positive(Id::from(1)), now);
 
     // A single V6/H2 attempt: the hint is deduplicated against the resolved
     // address rather than being attempted a second time.
@@ -342,15 +337,12 @@ fn multiple_target_names() {
     let (now, mut he) = setup();
 
     expect_initial_dns_queries(&mut he, now);
-    // HTTPS response with a different target name
+    // HTTPS response with a different target name and a v6 hint. The hint is
+    // attempted right away, then the target name is queried too.
     he.input(in_dns_https_positive_svc1(Id::from(0)), now);
-    he.expect(out_send_dns_svc1(Id::from(3)), now);
-    // Now we have queries for both "example.com" and "svc1.example.com."
-    // Getting a positive AAAA for the main host
-    he.input(in_dns_aaaa_positive(Id::from(1)), now);
     he.expect(
         Output::AttemptConnection {
-            id: Id::from(4),
+            id: Id::from(3),
             endpoint: Endpoint {
                 target: EndpointTarget::Address(SocketAddr::new(V6_ADDR_2.into(), PORT)),
                 http_version: ConnectionAttemptHttpVersions::H3,
@@ -360,6 +352,7 @@ fn multiple_target_names() {
         },
         now,
     );
+    he.expect(out_send_dns_svc1(Id::from(4)), now);
 }
 
 /// Two HTTPS `ServiceInfo` records where only the first has ECH config ("partial ECH").
@@ -822,11 +815,11 @@ mod https_port_svcparam_overrides_port_for {
     use super::*;
 
     fn check(ipv4_hints: Vec<Ipv4Addr>) {
-        let (mut now, mut he) = setup(); // constructed with PORT (443)
+        let (now, mut he) = setup(); // constructed with PORT (443)
 
         // HTTPS arrives with port=8443 while AAAA and A are still in-flight.
-        // After the resolution delay the hint is used; the connection attempt
-        // must use 8443, not the authority port 443. IPv6 is preferred.
+        // The v6 hint is used right away; the connection attempt must use
+        // 8443, not the authority port 443. IPv6 is preferred.
         expect_initial_dns_queries(&mut he, now);
         he.input(
             Input::DnsResult {
@@ -841,9 +834,6 @@ mod https_port_svcparam_overrides_port_for {
             },
             now,
         );
-        he.expect(out_resolution_delay(), now);
-
-        now += RESOLUTION_DELAY;
         he.expect(out_attempt_v6_h3_custom_port(Id::from(3)), now);
     }
 
