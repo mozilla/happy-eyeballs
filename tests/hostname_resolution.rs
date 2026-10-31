@@ -720,13 +720,13 @@ fn single_stack_skips_disabled_address_family_hints() {
 
         he.expect(out_send_dns_https(Id::from(0)), now);
         he.expect(case.dns_query, now);
-        // The HTTPS record carries a hint for both address families.
+        // The HTTPS record carries a hint for both address families. The
+        // enabled family's hint counts as its answer, so no resolution delay.
         he.input(in_dns_https_positive_v4_and_v6_hints(Id::from(0)), now);
-        he.expect(out_resolution_delay(), now);
-        he.input(case.dns_response, now);
-
         let [first, second] = case.expected_connections;
         he.expect(first, now);
+        he.expect(out_connection_attempt_delay(), now);
+        he.input(case.dns_response, now);
         he.expect(out_connection_attempt_delay(), now);
         // No attempt to the disabled family's hint follows.
         he.expect_connection_attempts([second], &mut now);
