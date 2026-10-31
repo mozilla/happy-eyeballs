@@ -47,12 +47,15 @@
 //!
 //! For complete example usage, see the [`tests/`](tests/).
 
-use std::collections::{BTreeMap, HashSet, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 use std::fmt::Debug;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::num::NonZeroU32;
 use std::time::{Duration, Instant};
 
+/// Re-exported: callers need [`EnumSet`]'s API, not their own `enumset` dep.
+pub use enumset;
+use enumset::{EnumSet, EnumSetType, enum_set};
 use thiserror::Error;
 use tracing::{debug, trace};
 use url::Host as UrlHost;
@@ -308,7 +311,7 @@ pub enum DnsRecordType {
 pub struct ServiceInfo {
     pub priority: u16,
     pub target_name: TargetName,
-    pub alpn_http_versions: HashSet<HttpVersion>,
+    pub alpn_http_versions: HttpVersions,
     pub ech_config: Option<EchConfig>,
     pub ipv4_hints: Vec<Ipv4Addr>,
     pub ipv6_hints: Vec<Ipv6Addr>,
@@ -375,9 +378,8 @@ impl ServiceInfo {
         // Section 2.4.3) and yields no endpoints.
         //
         // <https://www.rfc-editor.org/rfc/rfc9460#section-7.1.1>
-        let mut versions = self.alpn_http_versions.clone();
-        network_config.http_versions.filter_disabled(&mut versions);
-        let http_versions = ConnectionAttemptHttpVersions::from_http_versions(&versions);
+        let versions = self.alpn_http_versions & network_config.http_versions;
+        let http_versions = ConnectionAttemptHttpVersions::from_http_versions(versions);
 
         // By-name mode: connect to the record's target name over each advertised
         // ALPN, carrying its ECH. Everything below is address racing, which does
@@ -396,7 +398,7 @@ impl ServiceInfo {
             };
             return http_versions
                 .iter()
-                .map(|&http_version| Endpoint {
+                .map(|http_version| Endpoint {
                     target: EndpointTarget::Name {
                         host: host.to_string(),
                         port,
@@ -448,7 +450,7 @@ impl ServiceInfo {
             .flat_map(|ip| {
                 // TODO: way around allocation?
                 let ech_config = ech_enabled.then(|| self.ech_config.clone()).flatten();
-                http_versions.iter().map(move |&http_version| Endpoint {
+                http_versions.iter().map(move |http_version| Endpoint {
                     target: EndpointTarget::Address(SocketAddr::new(ip, port)),
                     http_version,
                     ech_config: ech_config.clone(),
@@ -465,9 +467,9 @@ impl ServiceInfo {
             .flat_map(|ip| {
                 // TODO: way around allocation?
                 let ech_config = ech_enabled.then(|| self.ech_config.clone()).flatten();
-                http_versions.iter().map(move |v| Endpoint {
+                http_versions.iter().map(move |http_version| Endpoint {
                     target: EndpointTarget::Address(SocketAddr::new(ip, port)),
-                    http_version: *v,
+                    http_version,
                     ech_config: ech_config.clone(),
                 })
             });
@@ -477,11 +479,13 @@ impl ServiceInfo {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+// Discriminants are `HttpVersions` bit positions, i.e. ABI: only ever append.
+#[derive(Debug, PartialOrd, Ord, EnumSetType)]
+#[enumset(repr = "u8")]
 pub enum HttpVersion {
-    H3,
-    H2,
-    H1,
+    H3 = 0,
+    H2 = 1,
+    H1 = 2,
 }
 
 /// Possible connection attempt HTTP version combinations.
@@ -489,7 +493,8 @@ pub enum HttpVersion {
 /// While on a QUIC connection attempts one can only use HTTP/3, on a TCP
 /// connection attempt one might either negotiate HTTP/2 or HTTP/1.1 via TLS
 /// ALPN.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+// The derived order defines protocol preference in `interleave_endpoints`.
+#[derive(Debug, PartialOrd, Ord, EnumSetType)]
 pub enum ConnectionAttemptHttpVersions {
     H3,
     H2OrH1,
@@ -509,17 +514,11 @@ impl From<HttpVersion> for ConnectionAttemptHttpVersions {
 
 impl ConnectionAttemptHttpVersions {
     /// [`HttpVersion::H2`] and [`HttpVersion::H1`] into [`ConnectionAttemptHttpVersions::H2OrH1`].
-    fn from_http_versions(http_versions: &HashSet<HttpVersion>) -> HashSet<Self> {
-        let mut combinations = HashSet::new();
-        if http_versions.contains(&HttpVersion::H3) {
-            combinations.insert(Self::H3);
-        }
-        if http_versions.contains(&HttpVersion::H2) && http_versions.contains(&HttpVersion::H1) {
-            combinations.insert(Self::H2OrH1);
-        } else if http_versions.contains(&HttpVersion::H2) {
-            combinations.insert(Self::H2);
-        } else if http_versions.contains(&HttpVersion::H1) {
-            combinations.insert(Self::H1);
+    fn from_http_versions(http_versions: HttpVersions) -> EnumSet<Self> {
+        let mut combinations = http_versions.iter().map(Self::from).collect();
+        if http_versions.is_superset(TCP_HTTP_VERSIONS) {
+            combinations -= Self::H2 | Self::H1;
+            combinations |= Self::H2OrH1;
         }
         combinations
     }
@@ -573,41 +572,15 @@ impl DnsQuery {
 }
 
 /// Configuration for supported HTTP versions.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct HttpVersions {
-    /// Whether HTTP/1.1 is enabled.
-    pub h1: bool,
-    /// Whether HTTP/2 is enabled.
-    pub h2: bool,
-    /// Whether HTTP/3 is enabled.
-    pub h3: bool,
-}
+///
+/// [`Default::default`] is enumset's empty set; [`HttpVersions::ALL`] enables all.
+///
+/// One byte, so it crosses FFI as a bitmask: [`EnumSet::as_repr`] out,
+/// [`EnumSet::try_from_repr`] in (`from_repr` panics on foreign bits).
+pub type HttpVersions = EnumSet<HttpVersion>;
 
-impl HttpVersions {
-    /// Remove the [`HttpVersion`]s disabled by this configuration from `versions`.
-    fn filter_disabled(&self, versions: &mut HashSet<HttpVersion>) {
-        if !self.h3 {
-            versions.remove(&HttpVersion::H3);
-        }
-        if !self.h2 {
-            versions.remove(&HttpVersion::H2);
-        }
-        if !self.h1 {
-            versions.remove(&HttpVersion::H1);
-        }
-    }
-}
-
-impl Default for HttpVersions {
-    fn default() -> Self {
-        // Enable all by default.
-        Self {
-            h1: true,
-            h2: true,
-            h3: true,
-        }
-    }
-}
+/// Versions negotiable on a TCP connection attempt, via TLS ALPN.
+const TCP_HTTP_VERSIONS: HttpVersions = enum_set!(HttpVersion::H2 | HttpVersion::H1);
 
 /// IP connectivity and preference mode.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -797,7 +770,7 @@ pub enum ResolutionMode {
 impl Default for NetworkConfig {
     fn default() -> Self {
         Self {
-            http_versions: HttpVersions::default(),
+            http_versions: HttpVersions::ALL,
             ip: IpPreference::DualStackPreferV6,
             alt_svc: Vec::new(),
             resolution_delay: RESOLUTION_DELAY,
@@ -825,12 +798,8 @@ impl NetworkConfig {
         }
     }
 
-    const fn is_http_version_disabled(&self, http_version: HttpVersion) -> bool {
-        match http_version {
-            HttpVersion::H3 => !self.http_versions.h3,
-            HttpVersion::H2 => !self.http_versions.h2,
-            HttpVersion::H1 => !self.http_versions.h1,
-        }
+    fn is_http_version_disabled(&self, http_version: HttpVersion) -> bool {
+        !self.http_versions.contains(http_version)
     }
 }
 
@@ -1045,6 +1014,8 @@ impl From<ConstructorErrorInner> for ConstructorError {
 enum ConstructorErrorInner {
     #[error("invalid host: {0}")]
     InvalidHost(#[from] url::ParseError),
+    #[error("no HTTP version enabled")]
+    NoHttpVersion,
 }
 
 #[expect(clippy::missing_fields_in_debug, reason = "empty fields are omitted")]
@@ -1092,6 +1063,10 @@ impl HappyEyeballs {
         port: u16,
         network_config: NetworkConfig,
     ) -> Result<Self, ConstructorError> {
+        if network_config.http_versions.is_empty() {
+            return Err(ConstructorErrorInner::NoHttpVersion.into());
+        }
+
         // Prefer URL-style host parsing (domains and bracketed IPv6).
         // If that fails, accept raw IP literals (IPv4/IPv6) without brackets.
         let host = match UrlHost::parse(host) {
@@ -1575,7 +1550,7 @@ impl HappyEyeballs {
     /// > once one of the following condition sets is met:
     /// >
     /// > Either:
-    /// >  
+    /// >
     /// > - Some positive (non-empty) address answers have been received AND
     /// > - A postive (non-empty) or negative (empty) answer has been received for the preferred address family that was queried AND
     /// > - SVCB/HTTPS service information has been received (or has received a negative response)
@@ -1801,19 +1776,16 @@ impl HappyEyeballs {
     /// HTTP versions when the host is an IP address (no DNS involved).
     ///
     /// Default H2/H1, filtered by network config.
-    fn ip_host_http_versions(&self) -> HashSet<ConnectionAttemptHttpVersions> {
-        let mut http_versions = HashSet::from([HttpVersion::H2, HttpVersion::H1]);
-        self.network_config
-            .http_versions
-            .filter_disabled(&mut http_versions);
-        ConnectionAttemptHttpVersions::from_http_versions(&http_versions)
+    fn ip_host_http_versions(&self) -> EnumSet<ConnectionAttemptHttpVersions> {
+        let http_versions = self.network_config.http_versions & TCP_HTTP_VERSIONS;
+        ConnectionAttemptHttpVersions::from_http_versions(http_versions)
     }
 
     /// HTTP versions for the origin fallback bucket.
     ///
     /// Default H2/H1, filtered by network config.
     /// HTTPS-record ALPNs are excluded: those apply only to the HTTPS bucket.
-    fn fallback_http_versions(&self) -> HashSet<ConnectionAttemptHttpVersions> {
+    fn fallback_http_versions(&self) -> EnumSet<ConnectionAttemptHttpVersions> {
         self.ip_host_http_versions()
     }
 
@@ -1887,7 +1859,7 @@ impl HappyEyeballs {
         {
             return http_versions
                 .iter()
-                .map(|&http_version| Endpoint {
+                .map(|http_version| Endpoint {
                     target: EndpointTarget::Name {
                         host: host.to_string(),
                         port: self.port,
@@ -1901,7 +1873,7 @@ impl HappyEyeballs {
         self.origin_addrs()
             .into_iter()
             .flat_map(|ip| {
-                http_versions.iter().map(move |&http_version| Endpoint {
+                http_versions.iter().map(move |http_version| Endpoint {
                     target: EndpointTarget::Address(SocketAddr::new(ip, self.port)),
                     http_version,
                     ech_config: None,
@@ -2100,6 +2072,35 @@ impl HappyEyeballs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn no_http_version_enabled() {
+        let config = NetworkConfig {
+            http_versions: HttpVersions::EMPTY,
+            ..NetworkConfig::default()
+        };
+        let err = HappyEyeballs::new_with_network_config("example.com", 443, config).unwrap_err();
+        assert!(matches!(err.inner, ConstructorErrorInner::NoHttpVersion));
+        assert_eq!(err.to_string(), "no HTTP version enabled");
+    }
+
+    /// Every input subset of the `H2 + H1 -> H2OrH1` collapse.
+    #[test]
+    fn connection_attempt_http_versions_from_http_versions() {
+        use ConnectionAttemptHttpVersions as C;
+        for (versions, expected) in [
+            (HttpVersions::EMPTY, EnumSet::EMPTY),
+            (HttpVersion::H1.into(), C::H1.into()),
+            (HttpVersion::H2.into(), C::H2.into()),
+            (HttpVersion::H3.into(), C::H3.into()),
+            (HttpVersion::H2 | HttpVersion::H1, C::H2OrH1.into()),
+            (HttpVersion::H3 | HttpVersion::H1, C::H3 | C::H1),
+            (HttpVersion::H3 | HttpVersion::H2, C::H3 | C::H2),
+            (HttpVersions::ALL, C::H3 | C::H2OrH1),
+        ] {
+            assert_eq!(C::from_http_versions(versions), expected, "{versions:?}");
+        }
+    }
 
     #[test]
     fn dns_result_has_addrs() {

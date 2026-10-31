@@ -13,7 +13,7 @@ use std::{
 
 use happy_eyeballs::{
     CONNECTION_ATTEMPT_DELAY, ConnectionAttemptHttpVersions, DnsRecordType, DnsResult, Endpoint,
-    EndpointTarget, HappyEyeballs, HttpVersions, Id, Input, IpPreference, NetworkConfig, Output,
+    EndpointTarget, HappyEyeballs, HttpVersion, Id, Input, IpPreference, NetworkConfig, Output,
     RESOLUTION_DELAY,
 };
 
@@ -154,7 +154,6 @@ fn move_on_non_timeout() {
         // V6 preferred, V6 positive, HTTPS positive, expect V6 connection attempt
         Case {
             address_family: NetworkConfig {
-                http_versions: HttpVersions::default(),
                 ip: IpPreference::DualStackPreferV6,
                 ..NetworkConfig::default()
             },
@@ -165,7 +164,6 @@ fn move_on_non_timeout() {
         // V6 preferred, V4 positive, V6 positive, HTTPS positive, expect V6 connection attempt
         Case {
             address_family: NetworkConfig {
-                http_versions: HttpVersions::default(),
                 ip: IpPreference::DualStackPreferV6,
                 ..NetworkConfig::default()
             },
@@ -176,7 +174,6 @@ fn move_on_non_timeout() {
         // V6 preferred, V6 negative, V4 positive, HTTPS positive, expect V4 connection attempt
         Case {
             address_family: NetworkConfig {
-                http_versions: HttpVersions::default(),
                 ip: IpPreference::DualStackPreferV6,
                 ..NetworkConfig::default()
             },
@@ -187,7 +184,6 @@ fn move_on_non_timeout() {
         // V4 preferred, V4 positive, HTTPS positive, expect V4 connection attempt
         Case {
             address_family: NetworkConfig {
-                http_versions: HttpVersions::default(),
                 ip: IpPreference::DualStackPreferV4,
                 ..NetworkConfig::default()
             },
@@ -198,7 +194,6 @@ fn move_on_non_timeout() {
         // V4 preferred, V6 positive, V4 positive, HTTPS positive, expect V4 connection attempt
         Case {
             address_family: NetworkConfig {
-                http_versions: HttpVersions::default(),
                 ip: IpPreference::DualStackPreferV4,
                 ..NetworkConfig::default()
             },
@@ -209,7 +204,6 @@ fn move_on_non_timeout() {
         // V4 preferred, V4 negative, V6 positive, HTTPS positive, expect V6 connection attempt
         Case {
             address_family: NetworkConfig {
-                http_versions: HttpVersions::default(),
                 ip: IpPreference::DualStackPreferV4,
                 ..NetworkConfig::default()
             },
@@ -529,11 +523,7 @@ fn https_h3_upgrade_without_hints() {
 #[test]
 fn https_h3_disabled() {
     let (now, mut he) = setup_with_config(NetworkConfig {
-        http_versions: HttpVersions {
-            h1: true,
-            h2: true,
-            h3: false,
-        },
+        http_versions: HttpVersion::H1 | HttpVersion::H2,
         ..NetworkConfig::default()
     });
 
