@@ -572,8 +572,10 @@ fn multiple_ips_per_record() {
                 target: EndpointTarget::Address(SocketAddr::new(V6_ADDR_2.into(), PORT)),
                 http_version: ConnectionAttemptHttpVersions::H2OrH1,
                 ech_config: None,
+                offer_early_data: false,
             },
             is_ech_retry: false,
+            offer_early_data: false,
         },
         now,
     );

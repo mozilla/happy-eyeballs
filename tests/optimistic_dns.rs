@@ -449,8 +449,10 @@ fn refresh_dropping_ech_takes_preference() {
                 target: EndpointTarget::Address(SocketAddr::new(V6_ADDR.into(), PORT)),
                 http_version: ConnectionAttemptHttpVersions::H3,
                 ech_config: Some(ech_config()),
+                offer_early_data: false,
             },
             is_ech_retry: false,
+            offer_early_data: false,
         },
         now,
     );
