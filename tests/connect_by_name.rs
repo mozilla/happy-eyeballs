@@ -43,8 +43,10 @@ fn out_attempt_by_name(id: Id, http_version: ConnectionAttemptHttpVersions) -> O
             },
             http_version,
             ech_config: None,
+            offer_early_data: false,
         },
         is_ech_retry: false,
+        offer_early_data: false,
     }
 }
 
@@ -166,8 +168,10 @@ fn by_name_attempts_alt_svc_by_name_over_h3() {
                 },
                 http_version: ConnectionAttemptHttpVersions::H3,
                 ech_config: None,
+                offer_early_data: false,
             },
             is_ech_retry: false,
+            offer_early_data: false,
         },
         now,
     );

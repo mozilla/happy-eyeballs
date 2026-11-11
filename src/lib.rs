@@ -32,7 +32,7 @@
 //!             // answer from an expired cache entry (Optimistic DNS).
 //! #           dns_id = Some(id);
 //!         }
-//!         Output::AttemptConnection { id, endpoint, is_ech_retry } => {
+//!         Output::AttemptConnection { id, endpoint, is_ech_retry, offer_early_data } => {
 //!             // Attempt connection.
 //!         }
 //!         _ => {}
@@ -319,6 +319,7 @@ pub enum Output {
         id: Id,
         endpoint: Endpoint,
         is_ech_retry: bool,
+        offer_early_data: bool,
     },
 
     /// Cancel a connection attempt
@@ -459,6 +460,7 @@ impl ServiceInfo {
                     },
                     http_version,
                     ech_config: ech_config.clone(),
+                    offer_early_data: false,
                 })
                 .collect();
         }
@@ -508,6 +510,7 @@ impl ServiceInfo {
                     target: EndpointTarget::Address(SocketAddr::new(ip, port)),
                     http_version,
                     ech_config: ech_config.clone(),
+                    offer_early_data: false,
                 })
             });
 
@@ -525,6 +528,7 @@ impl ServiceInfo {
                     target: EndpointTarget::Address(addr.with_port(port)),
                     http_version: *v,
                     ech_config: ech_config.clone(),
+                    offer_early_data: false,
                 })
             });
 
@@ -650,6 +654,16 @@ impl HttpVersions {
         }
         if !self.h1 {
             versions.remove(&HttpVersion::H1);
+        }
+    }
+
+    /// No HTTP version enabled.
+    #[must_use]
+    pub const fn none() -> Self {
+        Self {
+            h1: false,
+            h2: false,
+            h3: false,
         }
     }
 }
@@ -798,6 +812,16 @@ pub struct NetworkConfig {
     ///
     /// Defaults to [`ResolutionMode::Ip`], the normal Happy Eyeballs path.
     pub resolution: ResolutionMode,
+    /// HTTP versions for which the caller holds a resumption token, and can
+    /// therefore offer 0-RTT early data.
+    ///
+    /// A token is per protocol variant: an HTTP/3 token says nothing about
+    /// HTTP/2. For an endpoint whose HTTP version is covered here, the candidate
+    /// list carries two variants, one with
+    /// [`offer_early_data`](Endpoint::offer_early_data) set and one without.
+    ///
+    /// Defaults to no early data on any version.
+    pub early_data: HttpVersions,
 }
 
 /// How the origin host is turned into connection attempts.
@@ -862,6 +886,7 @@ impl Default for NetworkConfig {
             ech: true,
             wait_for_preferred_address: true,
             resolution: ResolutionMode::Ip,
+            early_data: HttpVersions::none(),
         }
     }
 }
@@ -888,6 +913,19 @@ impl NetworkConfig {
             HttpVersion::H1 => !self.http_versions.h1,
         }
     }
+
+    /// Whether the caller holds a resumption token covering this attempt
+    /// variant, thus allowing it to offer 0-RTT early data.
+    const fn early_data_offered(&self, http_version: ConnectionAttemptHttpVersions) -> bool {
+        match http_version {
+            ConnectionAttemptHttpVersions::H3 => self.early_data.h3,
+            ConnectionAttemptHttpVersions::H2 => self.early_data.h2,
+            ConnectionAttemptHttpVersions::H1 => self.early_data.h1,
+            // A TCP attempt may negotiate either HTTP version, so either
+            // token can be offered.
+            ConnectionAttemptHttpVersions::H2OrH1 => self.early_data.h2 || self.early_data.h1,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -908,6 +946,9 @@ pub struct ConnectionAttempt {
     /// Per RFC 9849 Section 6.1.6, a second `EchRetry` on such an attempt
     /// must be treated as a failure.
     pub is_ech_retry: bool,
+    /// Whether this attempt offers 0-RTT early data, mirroring
+    /// [`Endpoint::offer_early_data`].
+    pub offer_early_data: bool,
 }
 
 impl ConnectionAttempt {
@@ -942,6 +983,14 @@ pub struct Endpoint {
     pub target: EndpointTarget,
     pub http_version: ConnectionAttemptHttpVersions,
     pub ech_config: Option<EchConfig>,
+    /// Whether this attempt should offer 0-RTT early data.
+    ///
+    /// Early data is a third dimension of the attempt variants, next to address
+    /// family and HTTP version: for an endpoint the client holds a resumption
+    /// token for, the candidate list carries two variants, `offer_early_data:
+    /// true` first and `offer_early_data: false` after. A blackholed 0-RTT
+    /// attempt thus costs one connection attempt delay, without a watchdog.
+    pub offer_early_data: bool,
 }
 
 impl Endpoint {
@@ -1682,10 +1731,12 @@ impl HappyEyeballs {
             started: now,
             state: ConnectionState::InProgress,
             is_ech_retry: false,
+            offer_early_data: endpoint.offer_early_data,
         });
 
         Some(Output::AttemptConnection {
             id,
+            offer_early_data: endpoint.offer_early_data,
             endpoint,
             is_ech_retry: false,
         })
@@ -1713,10 +1764,12 @@ impl HappyEyeballs {
             started: now,
             state: ConnectionState::InProgress,
             is_ech_retry: true,
+            offer_early_data: endpoint.offer_early_data,
         });
 
         Some(Output::AttemptConnection {
             id,
+            offer_early_data: endpoint.offer_early_data,
             endpoint,
             is_ech_retry: true,
         })
@@ -1739,7 +1792,39 @@ impl HappyEyeballs {
             endpoints.extend(interleave_endpoints(tier, self.network_config.prefer_v6()));
         }
 
-        endpoints
+        self.expand_early_data(endpoints)
+    }
+
+    /// Expand each endpoint covered by a resumption token into two attempt
+    /// variants: one that offers 0-RTT early data and, right after it, one that
+    /// does not.
+    ///
+    /// Early data is a dimension of the attempt variants, next to address family
+    /// and HTTP version: a blackholed 0-RTT attempt then costs one connection
+    /// attempt delay instead of a long watchdog, because the plain variant is
+    /// already queued behind it. The pair is placed adjacently, early data
+    /// first, so the token is tried before the fallback.
+    fn expand_early_data(&self, endpoints: Vec<Endpoint>) -> Vec<Endpoint> {
+        let mut expanded = Vec::with_capacity(endpoints.len());
+        for endpoint in endpoints {
+            if self
+                .network_config
+                .early_data_offered(endpoint.http_version)
+            {
+                let plain = Endpoint {
+                    offer_early_data: false,
+                    ..endpoint.clone()
+                };
+                expanded.push(Endpoint {
+                    offer_early_data: true,
+                    ..endpoint
+                });
+                expanded.push(plain);
+            } else {
+                expanded.push(endpoint);
+            }
+        }
+        expanded
     }
 
     /// Endpoints from completed HTTPS records, ordered by priority and
@@ -1913,6 +1998,7 @@ impl HappyEyeballs {
                     target: EndpointTarget::Name { host, port },
                     http_version,
                     ech_config: None,
+                    offer_early_data: false,
                 });
                 continue;
             }
@@ -1924,6 +2010,7 @@ impl HappyEyeballs {
                         target: EndpointTarget::Address(addr.with_port(port)),
                         http_version,
                         ech_config: None,
+                        offer_early_data: false,
                     }),
             );
         }
@@ -1954,6 +2041,7 @@ impl HappyEyeballs {
                     },
                     http_version,
                     ech_config: None,
+                    offer_early_data: false,
                 })
                 .collect();
         }
@@ -1965,6 +2053,7 @@ impl HappyEyeballs {
                     target: EndpointTarget::Address(addr.with_port(self.port)),
                     http_version,
                     ech_config: None,
+                    offer_early_data: false,
                 })
             })
             .collect()
