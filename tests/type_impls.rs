@@ -22,6 +22,11 @@ fn ech_config_as_ref() {
 }
 
 #[test]
+fn ech_config_debug() {
+    assert_eq!(format!("{:?}", ech_config()), "EchConfig([1, 2, 3, 4, 5])");
+}
+
+#[test]
 fn target_name_conversions() {
     let name = TargetName::from(HOSTNAME);
     assert_eq!(format!("{name:?}"), HOSTNAME);

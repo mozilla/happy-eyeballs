@@ -51,6 +51,7 @@ use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::fmt::Debug;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV6};
 use std::num::NonZeroU32;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use thiserror::Error;
@@ -105,19 +106,55 @@ pub enum Input {
 /// as defined in [RFC 9849 Section 4].
 ///
 /// [RFC 9849 Section 4]: https://datatracker.ietf.org/doc/html/rfc9849#section-4
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct EchConfig(Vec<u8>);
+#[derive(Clone)]
+pub struct EchConfig(EchConfigBytes);
+
+#[derive(Clone)]
+enum EchConfigBytes {
+    /// As passed to [`EchConfig::new`].
+    Owned(Vec<u8>),
+    /// Shared between clones, see [`EchConfig::share`].
+    Shared(Arc<[u8]>),
+}
 
 impl EchConfig {
     #[must_use]
     pub const fn new(bytes: Vec<u8>) -> Self {
-        Self(bytes)
+        Self(EchConfigBytes::Owned(bytes))
+    }
+
+    /// Move the bytes into a shared buffer, so that clones no longer copy them.
+    ///
+    /// Every endpoint built from an HTTPS record carries a clone of the
+    /// record's config, and a record can yield thousands of endpoints, rebuilt
+    /// for every connection attempt.
+    fn share(&mut self) {
+        if let EchConfigBytes::Owned(bytes) = &mut self.0 {
+            self.0 = EchConfigBytes::Shared(std::mem::take(bytes).into());
+        }
     }
 }
 
 impl AsRef<[u8]> for EchConfig {
     fn as_ref(&self) -> &[u8] {
-        &self.0
+        match &self.0 {
+            EchConfigBytes::Owned(bytes) => bytes,
+            EchConfigBytes::Shared(bytes) => bytes,
+        }
+    }
+}
+
+impl PartialEq for EchConfig {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_ref() == other.as_ref()
+    }
+}
+
+impl Eq for EchConfig {}
+
+impl Debug for EchConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_tuple("EchConfig").field(&self.as_ref()).finish()
     }
 }
 
@@ -502,7 +539,6 @@ impl ServiceInfo {
             // family, which is never queried either.
             .filter(|&ip| network_config.ip.allows(ip))
             .flat_map(|ip| {
-                // TODO: way around allocation?
                 let ech_config = ech_enabled.then(|| self.ech_config.clone()).flatten();
                 http_versions.iter().map(move |&http_version| Endpoint {
                     target: EndpointTarget::Address(SocketAddr::new(ip, port)),
@@ -519,7 +555,6 @@ impl ServiceInfo {
             .map(ResolvedAddr::V6)
             .chain(v4.iter().copied().map(ResolvedAddr::V4))
             .flat_map(|addr| {
-                // TODO: way around allocation?
                 let ech_config = ech_enabled.then(|| self.ech_config.clone()).flatten();
                 http_versions.iter().map(move |v| Endpoint {
                     target: EndpointTarget::Address(addr.with_port(port)),
@@ -1506,7 +1541,14 @@ impl HappyEyeballs {
         })
     }
 
-    fn on_dns_response(&mut self, id: Id, response: DnsResult, stale: bool, now: Instant) {
+    fn on_dns_response(&mut self, id: Id, mut response: DnsResult, stale: bool, now: Instant) {
+        if let DnsResult::Https(Ok(infos)) = &mut response {
+            infos
+                .iter_mut()
+                .filter_map(|i| i.ech_config.as_mut())
+                .for_each(EchConfig::share);
+        }
+
         // A revalidation response replaces the stale answer of the query it
         // belongs to, rather than opening a new record.
         if let Some(query) = self
@@ -1577,7 +1619,7 @@ impl HappyEyeballs {
                 // The state machine will naturally attempt the next connection
                 // when process() is called again with None input
             }
-            ConnectionResult::EchRetry(ech_config) => {
+            ConnectionResult::EchRetry(mut ech_config) => {
                 attempt.state = ConnectionState::Failed;
 
                 if !self.network_config.ech {
@@ -1600,6 +1642,7 @@ impl HappyEyeballs {
                     return;
                 }
 
+                ech_config.share();
                 self.ech_retries.push((id, ech_config));
             }
         }
