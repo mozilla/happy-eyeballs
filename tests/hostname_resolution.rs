@@ -6,15 +6,11 @@
 mod common;
 use common::*;
 
-use std::{
-    net::SocketAddr,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 use happy_eyeballs::{
-    CONNECTION_ATTEMPT_DELAY, ConnectionAttemptHttpVersions, DnsRecordType, DnsResult, Endpoint,
-    EndpointTarget, HappyEyeballs, HttpVersions, Id, Input, IpPreference, NetworkConfig, Output,
-    RESOLUTION_DELAY,
+    CONNECTION_ATTEMPT_DELAY, ConnectionAttemptHttpVersions, DnsRecordType, DnsResult,
+    HappyEyeballs, HttpVersions, Id, Input, IpPreference, NetworkConfig, Output, RESOLUTION_DELAY,
 };
 
 /// The origin's HTTPS record name when the origin is on [`CUSTOM_PORT`].
@@ -566,15 +562,11 @@ fn multiple_ips_per_record() {
     now += CONNECTION_ATTEMPT_DELAY;
 
     he.expect(
-        Output::AttemptConnection {
-            id: Id::from(4),
-            endpoint: Endpoint {
-                target: EndpointTarget::Address(SocketAddr::new(V6_ADDR_2.into(), PORT)),
-                http_version: ConnectionAttemptHttpVersions::H2OrH1,
-                ech_config: None,
-            },
-            is_ech_retry: false,
-        },
+        attempt(
+            Id::from(4),
+            V6_ADDR_2,
+            ConnectionAttemptHttpVersions::H2OrH1,
+        ),
         now,
     );
 }

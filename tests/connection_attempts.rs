@@ -13,8 +13,8 @@ use std::{
 };
 
 use happy_eyeballs::{
-    CONNECTION_ATTEMPT_DELAY, ConnectionAttemptHttpVersions, DnsResult, Endpoint, EndpointTarget,
-    Id, Input, NetworkConfig, Output, ScopedIpv6Addr,
+    CONNECTION_ATTEMPT_DELAY, ConnectionAttemptHttpVersions, DnsResult, Id, Input, NetworkConfig,
+    Output, ScopedIpv6Addr,
 };
 
 #[test]
@@ -176,15 +176,11 @@ fn successful_connection_cancels_others() {
 
     now += CONNECTION_ATTEMPT_DELAY;
     he.expect(
-        Output::AttemptConnection {
-            id: Id::from(5),
-            endpoint: Endpoint {
-                target: EndpointTarget::Address(SocketAddr::new(V6_ADDR_2.into(), PORT)),
-                http_version: ConnectionAttemptHttpVersions::H2OrH1,
-                ech_config: None,
-            },
-            is_ech_retry: false,
-        },
+        attempt(
+            Id::from(5),
+            V6_ADDR_2,
+            ConnectionAttemptHttpVersions::H2OrH1,
+        ),
         now,
     );
     he.input(in_connection_result_positive(Id::from(3)), now);

@@ -3,12 +3,9 @@
 mod common;
 use common::*;
 
-use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr};
 
-use happy_eyeballs::{
-    ConnectionAttemptHttpVersions, Endpoint, EndpointTarget, FailureReason, HappyEyeballs, Id,
-    Output,
-};
+use happy_eyeballs::{ConnectionAttemptHttpVersions, FailureReason, HappyEyeballs, Id, Output};
 
 /// All DNS queries fail. No connections are attempted.
 #[test]
@@ -67,18 +64,11 @@ fn ip_host_connection_failure() {
     let mut he = HappyEyeballs::new("127.0.0.1", PORT).unwrap();
 
     he.expect(
-        Output::AttemptConnection {
-            id: Id::from(0),
-            endpoint: Endpoint {
-                target: EndpointTarget::Address(SocketAddr::new(
-                    IpAddr::V4(Ipv4Addr::LOCALHOST),
-                    PORT,
-                )),
-                http_version: ConnectionAttemptHttpVersions::H2OrH1,
-                ech_config: None,
-            },
-            is_ech_retry: false,
-        },
+        attempt(
+            Id::from(0),
+            IpAddr::V4(Ipv4Addr::LOCALHOST),
+            ConnectionAttemptHttpVersions::H2OrH1,
+        ),
         now,
     );
     he.input(in_connection_result_negative(Id::from(0)), now);
