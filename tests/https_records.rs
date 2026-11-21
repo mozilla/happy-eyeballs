@@ -5,12 +5,12 @@
 mod common;
 use common::*;
 
-use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 use happy_eyeballs::{
     AltSvc, CONNECTION_ATTEMPT_DELAY, ConnectionAttemptHttpVersions, ConnectionResult,
-    DnsRecordType, DnsResult, EchConfig, Endpoint, EndpointTarget, FailureReason, HttpVersion, Id,
-    Input, IpPreference, NetworkConfig, Output,
+    DnsRecordType, DnsResult, EchConfig, FailureReason, HttpVersion, Id, Input, IpPreference,
+    NetworkConfig, Output,
 };
 
 #[test]
@@ -34,15 +34,7 @@ fn ech_config_propagated_to_endpoint() {
         now,
     );
     he.expect(
-        Output::AttemptConnection {
-            id: Id::from(3),
-            endpoint: Endpoint {
-                target: EndpointTarget::Address(SocketAddr::new(V6_ADDR.into(), PORT)),
-                http_version: ConnectionAttemptHttpVersions::H3,
-                ech_config: Some(ech_config()),
-            },
-            is_ech_retry: false,
-        },
+        attempt(Id::from(3), V6_ADDR, ConnectionAttemptHttpVersions::H3).ech(),
         now,
     );
 }
@@ -274,29 +266,17 @@ fn ech_disabled() {
     );
     // HTTPS bucket: V6:H3, but ECH stripped.
     he.expect(
-        Output::AttemptConnection {
-            id: Id::from(3),
-            endpoint: Endpoint {
-                target: EndpointTarget::Address(SocketAddr::new(V6_ADDR.into(), PORT)),
-                http_version: ConnectionAttemptHttpVersions::H3,
-                ech_config: None,
-            },
-            is_ech_retry: false,
-        },
+        attempt(Id::from(3), V6_ADDR, ConnectionAttemptHttpVersions::H3),
         now,
     );
 
     // Origin fallback is NOT skipped despite HTTPS record having ECH.
     he.expect_connection_attempts(
-        [Output::AttemptConnection {
-            id: Id::from(4),
-            endpoint: Endpoint {
-                target: EndpointTarget::Address(SocketAddr::new(V6_ADDR.into(), PORT)),
-                http_version: ConnectionAttemptHttpVersions::H2OrH1,
-                ech_config: None,
-            },
-            is_ech_retry: false,
-        }],
+        [attempt(
+            Id::from(4),
+            V6_ADDR,
+            ConnectionAttemptHttpVersions::H2OrH1,
+        )],
         &mut now,
     );
 }
@@ -319,15 +299,7 @@ fn ech_config_from_https_applies_to_aaaa() {
     he.expect(out_resolution_delay(), now);
     he.input(in_dns_aaaa_positive(Id::from(1)), now);
     he.expect(
-        Output::AttemptConnection {
-            id: Id::from(3),
-            endpoint: Endpoint {
-                target: EndpointTarget::Address(SocketAddr::new(V6_ADDR.into(), PORT)),
-                http_version: ConnectionAttemptHttpVersions::H3,
-                ech_config: Some(ech_config()),
-            },
-            is_ech_retry: false,
-        },
+        attempt(Id::from(3), V6_ADDR, ConnectionAttemptHttpVersions::H3).ech(),
         now,
     );
 }
@@ -341,15 +313,7 @@ fn multiple_target_names() {
     // attempted right away, then the target name is queried too.
     he.input(in_dns_https_positive_svc1(Id::from(0)), now);
     he.expect(
-        Output::AttemptConnection {
-            id: Id::from(3),
-            endpoint: Endpoint {
-                target: EndpointTarget::Address(SocketAddr::new(V6_ADDR_2.into(), PORT)),
-                http_version: ConnectionAttemptHttpVersions::H3,
-                ech_config: None,
-            },
-            is_ech_retry: false,
-        },
+        attempt(Id::from(3), V6_ADDR_2, ConnectionAttemptHttpVersions::H3),
         now,
     );
     he.expect(out_send_dns_svc1(Id::from(4)), now);
@@ -414,15 +378,9 @@ fn partial_ech_two_service_infos() {
         now,
     );
     he.expect(
-        Output::AttemptConnection {
-            id: Id::from(5),
-            endpoint: Endpoint {
-                target: EndpointTarget::Address(SocketAddr::new(V4_ADDR_2.into(), SVC1_PORT)),
-                http_version: ConnectionAttemptHttpVersions::H3,
-                ech_config: Some(ech_config()),
-            },
-            is_ech_retry: false,
-        },
+        attempt(Id::from(5), V4_ADDR_2, ConnectionAttemptHttpVersions::H3)
+            .port(SVC1_PORT)
+            .ech(),
         now,
     );
 
@@ -489,15 +447,9 @@ fn both_service_infos_have_ech_no_origin_fallback() {
         now,
     );
     he.expect(
-        Output::AttemptConnection {
-            id: Id::from(7),
-            endpoint: Endpoint {
-                target: EndpointTarget::Address(SocketAddr::new(V4_ADDR_2.into(), SVC1_PORT)),
-                http_version: ConnectionAttemptHttpVersions::H3,
-                ech_config: Some(ech_config()),
-            },
-            is_ech_retry: false,
-        },
+        attempt(Id::from(7), V4_ADDR_2, ConnectionAttemptHttpVersions::H3)
+            .port(SVC1_PORT)
+            .ech(),
         now,
     );
     he.expect(out_connection_attempt_delay(), now);
@@ -521,15 +473,9 @@ fn both_service_infos_have_ech_no_origin_fallback() {
     he.expect_connection_attempts(
         [
             // priority=2 (SVC2, port 10443, ech, alpn=h2)
-            Output::AttemptConnection {
-                id: Id::from(8),
-                endpoint: Endpoint {
-                    target: EndpointTarget::Address(SocketAddr::new(V4_ADDR.into(), SVC2_PORT)),
-                    http_version: ConnectionAttemptHttpVersions::H2,
-                    ech_config: Some(ech_config()),
-                },
-                is_ech_retry: false,
-            },
+            attempt(Id::from(8), V4_ADDR, ConnectionAttemptHttpVersions::H2)
+                .port(SVC2_PORT)
+                .ech(),
         ],
         &mut now,
     );
@@ -793,15 +739,9 @@ fn partial_ech_with_alt_svc() {
         now,
     );
     he.expect(
-        Output::AttemptConnection {
-            id: Id::from(5),
-            endpoint: Endpoint {
-                target: EndpointTarget::Address(SocketAddr::new(V4_ADDR_2.into(), SVC1_PORT)),
-                http_version: ConnectionAttemptHttpVersions::H3,
-                ech_config: Some(ech_config()),
-            },
-            is_ech_retry: false,
-        },
+        attempt(Id::from(5), V4_ADDR_2, ConnectionAttemptHttpVersions::H3)
+            .port(SVC1_PORT)
+            .ech(),
         now,
     );
 
@@ -897,15 +837,7 @@ fn https_port_svcparam_applies_but_fallbacks_follow() {
     // Positive AAAA: connection attempt must use port 8443, not 443
     he.input(in_dns_aaaa_positive(Id::from(1)), now);
     he.expect(
-        Output::AttemptConnection {
-            id: Id::from(3),
-            endpoint: Endpoint {
-                target: EndpointTarget::Address(SocketAddr::new(V6_ADDR.into(), CUSTOM_PORT)),
-                http_version: ConnectionAttemptHttpVersions::H3,
-                ech_config: None,
-            },
-            is_ech_retry: false,
-        },
+        attempt(Id::from(3), V6_ADDR, ConnectionAttemptHttpVersions::H3).port(CUSTOM_PORT),
         now,
     );
     he.input(in_dns_a_positive(Id::from(2)), now);
@@ -946,15 +878,7 @@ fn https_two_service_infos_with_different_ports() {
 
     let attempt =
         |id: u64, addr: IpAddr, port: u16, http_version: ConnectionAttemptHttpVersions| {
-            Output::AttemptConnection {
-                id: Id::from(id),
-                endpoint: Endpoint {
-                    target: EndpointTarget::Address(SocketAddr::new(addr, port)),
-                    http_version,
-                    ech_config: None,
-                },
-                is_ech_retry: false,
-            }
+            out_attempt(Id::from(id), addr, port, http_version)
         };
 
     expect_initial_dns_queries(&mut he, now);
@@ -1075,15 +999,7 @@ fn https_svc1_addresses_trigger_additional_attempts() {
     he.expect(out_connection_attempt_delay(), now);
 
     let attempt = |id: u64, addr: IpAddr, http_version: ConnectionAttemptHttpVersions| {
-        Output::AttemptConnection {
-            id: Id::from(id),
-            endpoint: Endpoint {
-                target: EndpointTarget::Address(SocketAddr::new(addr, PORT)),
-                http_version,
-                ech_config: None,
-            },
-            is_ech_retry: false,
-        }
+        out_attempt(Id::from(id), addr, PORT, http_version)
     };
 
     // Addresses respect HTTPS record priority: P1 (HOSTNAME, priority=1) endpoints
@@ -1251,15 +1167,7 @@ fn target_name_redirect_addresses_used_in_connection_attempts() {
         now,
     );
     he.expect(
-        Output::AttemptConnection {
-            id: Id::from(5),
-            endpoint: Endpoint {
-                target: EndpointTarget::Address(SocketAddr::new(V6_ADDR_2.into(), PORT)),
-                http_version: ConnectionAttemptHttpVersions::H3,
-                ech_config: None,
-            },
-            is_ech_retry: false,
-        },
+        attempt(Id::from(5), V6_ADDR_2, ConnectionAttemptHttpVersions::H3),
         now,
     );
     he.expect(out_connection_attempt_delay(), now);
@@ -1283,15 +1191,7 @@ fn target_name_redirect_addresses_used_in_connection_attempts() {
     he.expect_connection_attempts(
         [
             // SVC1 bucket (priority 1)
-            Output::AttemptConnection {
-                id: Id::from(6),
-                endpoint: Endpoint {
-                    target: EndpointTarget::Address(SocketAddr::new(V4_ADDR_2.into(), PORT)),
-                    http_version: ConnectionAttemptHttpVersions::H3,
-                    ech_config: None,
-                },
-                is_ech_retry: false,
-            },
+            attempt(Id::from(6), V4_ADDR_2, ConnectionAttemptHttpVersions::H3),
             // fallback bucket (origin)
             out_attempt_v6_h1_h2(Id::from(7)),
             out_attempt_v4_h1_h2(Id::from(8)),
@@ -1370,15 +1270,7 @@ fn ech_retry_same_endpoint() {
     he.input(in_dns_aaaa_positive(Id::from(1)), now);
     // First connection attempt with original ECH config.
     he.expect(
-        Output::AttemptConnection {
-            id: Id::from(3),
-            endpoint: Endpoint {
-                target: EndpointTarget::Address(SocketAddr::new(V6_ADDR.into(), PORT)),
-                http_version: ConnectionAttemptHttpVersions::H2,
-                ech_config: Some(ech_config()),
-            },
-            is_ech_retry: false,
-        },
+        attempt(Id::from(3), V6_ADDR, ConnectionAttemptHttpVersions::H2).ech(),
         now,
     );
     he.expect(out_connection_attempt_delay(), now);
@@ -1394,15 +1286,9 @@ fn ech_retry_same_endpoint() {
     // immediately (no delay — this is a server-initiated retry,
     // not a new candidate).
     he.expect(
-        Output::AttemptConnection {
-            id: Id::from(4),
-            endpoint: Endpoint {
-                target: EndpointTarget::Address(SocketAddr::new(V6_ADDR.into(), PORT)),
-                http_version: ConnectionAttemptHttpVersions::H2,
-                ech_config: Some(new_ech_config),
-            },
-            is_ech_retry: true,
-        },
+        attempt(Id::from(4), V6_ADDR, ConnectionAttemptHttpVersions::H2)
+            .ech_with(new_ech_config)
+            .ech_retry(),
         now,
     );
 }
@@ -1431,15 +1317,7 @@ fn ech_retry_without_ech_sets_flag() {
     he.expect(out_resolution_delay(), now);
     he.input(in_dns_aaaa_positive(Id::from(1)), now);
     he.expect(
-        Output::AttemptConnection {
-            id: Id::from(3),
-            endpoint: Endpoint {
-                target: EndpointTarget::Address(SocketAddr::new(V6_ADDR.into(), PORT)),
-                http_version: ConnectionAttemptHttpVersions::H2,
-                ech_config: Some(ech_config()),
-            },
-            is_ech_retry: false,
-        },
+        attempt(Id::from(3), V6_ADDR, ConnectionAttemptHttpVersions::H2).ech(),
         now,
     );
     he.expect(out_connection_attempt_delay(), now);
@@ -1451,15 +1329,9 @@ fn ech_retry_without_ech_sets_flag() {
         now,
     );
     he.expect(
-        Output::AttemptConnection {
-            id: Id::from(4),
-            endpoint: Endpoint {
-                target: EndpointTarget::Address(SocketAddr::new(V6_ADDR.into(), PORT)),
-                http_version: ConnectionAttemptHttpVersions::H2,
-                ech_config: Some(empty_ech_config),
-            },
-            is_ech_retry: true,
-        },
+        attempt(Id::from(4), V6_ADDR, ConnectionAttemptHttpVersions::H2)
+            .ech_with(empty_ech_config)
+            .ech_retry(),
         now,
     );
 }
@@ -1492,15 +1364,7 @@ fn ech_retry_no_infinite_loop() {
     he.expect(out_resolution_delay(), now);
     he.input(in_dns_aaaa_positive(Id::from(1)), now);
     he.expect(
-        Output::AttemptConnection {
-            id: Id::from(3),
-            endpoint: Endpoint {
-                target: EndpointTarget::Address(SocketAddr::new(V6_ADDR.into(), PORT)),
-                http_version: ConnectionAttemptHttpVersions::H2,
-                ech_config: Some(ech_config()),
-            },
-            is_ech_retry: false,
-        },
+        attempt(Id::from(3), V6_ADDR, ConnectionAttemptHttpVersions::H2).ech(),
         now,
     );
     he.expect(out_connection_attempt_delay(), now);
@@ -1513,15 +1377,9 @@ fn ech_retry_no_infinite_loop() {
         now,
     );
     he.expect(
-        Output::AttemptConnection {
-            id: Id::from(4),
-            endpoint: Endpoint {
-                target: EndpointTarget::Address(SocketAddr::new(V6_ADDR.into(), PORT)),
-                http_version: ConnectionAttemptHttpVersions::H2,
-                ech_config: Some(retry_ech_config),
-            },
-            is_ech_retry: true,
-        },
+        attempt(Id::from(4), V6_ADDR, ConnectionAttemptHttpVersions::H2)
+            .ech_with(retry_ech_config)
+            .ech_retry(),
         now,
     );
     he.expect(out_connection_attempt_delay(), now);
@@ -1539,15 +1397,7 @@ fn ech_retry_no_infinite_loop() {
     // from DNS).
     he.input(in_dns_a_positive(Id::from(2)), now);
     he.expect(
-        Output::AttemptConnection {
-            id: Id::from(5),
-            endpoint: Endpoint {
-                target: EndpointTarget::Address(SocketAddr::new(V4_ADDR.into(), PORT)),
-                http_version: ConnectionAttemptHttpVersions::H2,
-                ech_config: Some(ech_config()),
-            },
-            is_ech_retry: false,
-        },
+        attempt(Id::from(5), V4_ADDR, ConnectionAttemptHttpVersions::H2).ech(),
         now,
     );
 }

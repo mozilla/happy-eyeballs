@@ -367,141 +367,145 @@ pub fn out_send_dns_a(id: Id) -> Output {
     out_send_dns(id, HOSTNAME, DnsRecordType::A)
 }
 
-pub fn out_attempt_v6_h1_h2(id: Id) -> Output {
-    Output::AttemptConnection {
-        id,
-        endpoint: Endpoint {
-            target: EndpointTarget::Address(SocketAddr::new(V6_ADDR.into(), PORT)),
-            http_version: ConnectionAttemptHttpVersions::H2OrH1,
-            ech_config: None,
-        },
-        is_ech_retry: false,
-    }
-}
-
-pub fn out_attempt_v6_h2(id: Id) -> Output {
-    Output::AttemptConnection {
-        id,
-        endpoint: Endpoint {
-            target: EndpointTarget::Address(SocketAddr::new(V6_ADDR.into(), PORT)),
-            http_version: ConnectionAttemptHttpVersions::H2,
-            ech_config: None,
-        },
-        is_ech_retry: false,
-    }
-}
-
-pub fn out_attempt_v6_h3(id: Id) -> Output {
-    Output::AttemptConnection {
-        id,
-        endpoint: Endpoint {
-            target: EndpointTarget::Address(SocketAddr::new(V6_ADDR.into(), PORT)),
-            http_version: ConnectionAttemptHttpVersions::H3,
-            ech_config: None,
-        },
-        is_ech_retry: false,
-    }
-}
-
-pub fn out_attempt_v6_h3_custom_port(id: Id) -> Output {
-    Output::AttemptConnection {
-        id,
-        endpoint: Endpoint {
-            target: EndpointTarget::Address(SocketAddr::new(V6_ADDR.into(), CUSTOM_PORT)),
-            http_version: ConnectionAttemptHttpVersions::H3,
-            ech_config: None,
-        },
-        is_ech_retry: false,
-    }
-}
-
-pub fn out_attempt_v4_h1_h2(id: Id) -> Output {
-    Output::AttemptConnection {
-        id,
-        endpoint: Endpoint {
-            target: EndpointTarget::Address(SocketAddr::new(V4_ADDR.into(), PORT)),
-            http_version: ConnectionAttemptHttpVersions::H2OrH1,
-            ech_config: None,
-        },
-        is_ech_retry: false,
-    }
-}
-
-pub fn out_attempt_v4_h2(id: Id) -> Output {
-    Output::AttemptConnection {
-        id,
-        endpoint: Endpoint {
-            target: EndpointTarget::Address(SocketAddr::new(V4_ADDR.into(), PORT)),
-            http_version: ConnectionAttemptHttpVersions::H2,
-            ech_config: None,
-        },
-        is_ech_retry: false,
-    }
-}
-
-pub fn out_attempt_v4_h3(id: Id) -> Output {
-    Output::AttemptConnection {
-        id,
-        endpoint: Endpoint {
-            target: EndpointTarget::Address(SocketAddr::new(V4_ADDR.into(), PORT)),
-            http_version: ConnectionAttemptHttpVersions::H3,
-            ech_config: None,
-        },
-        is_ech_retry: false,
-    }
-}
-
-pub fn out_attempt_v4_h3_custom_port(id: Id) -> Output {
-    Output::AttemptConnection {
-        id,
-        endpoint: Endpoint {
-            target: EndpointTarget::Address(SocketAddr::new(V4_ADDR.into(), CUSTOM_PORT)),
-            http_version: ConnectionAttemptHttpVersions::H3,
-            ech_config: None,
-        },
-        is_ech_retry: false,
-    }
-}
-
-pub fn out_attempt_v6_h2_custom_port(id: Id) -> Output {
-    Output::AttemptConnection {
-        id,
-        endpoint: Endpoint {
-            target: EndpointTarget::Address(SocketAddr::new(V6_ADDR.into(), CUSTOM_PORT)),
-            http_version: ConnectionAttemptHttpVersions::H2,
-            ech_config: None,
-        },
-        is_ech_retry: false,
-    }
-}
-
-pub fn out_attempt_v4_h2_custom_port(id: Id) -> Output {
-    Output::AttemptConnection {
-        id,
-        endpoint: Endpoint {
-            target: EndpointTarget::Address(SocketAddr::new(V4_ADDR.into(), CUSTOM_PORT)),
-            http_version: ConnectionAttemptHttpVersions::H2,
-            ech_config: None,
-        },
-        is_ech_retry: false,
-    }
-}
-
-pub const fn out_attempt(
+/// Build an expected [`Output::AttemptConnection`] to `ip` at [`PORT`], without
+/// ECH and not an ECH retry. Change the defaults with the chainable
+/// [`AttemptExt`] methods, e.g. `attempt(id, V6_ADDR, H3).port(8443).ech()`.
+pub fn attempt<A: Into<IpAddr>>(
     id: Id,
-    addr: IpAddr,
+    ip: A,
+    http_version: ConnectionAttemptHttpVersions,
+) -> Output {
+    attempt_to(
+        id,
+        EndpointTarget::Address(SocketAddr::new(ip.into(), PORT)),
+        http_version,
+    )
+}
+
+/// Like [`attempt`], but to `host` and `port` by name ([`EndpointTarget::Name`]).
+pub fn attempt_by_name(
+    id: Id,
+    host: &str,
     port: u16,
+    http_version: ConnectionAttemptHttpVersions,
+) -> Output {
+    attempt_to(
+        id,
+        EndpointTarget::Name {
+            host: host.to_string(),
+            port,
+        },
+        http_version,
+    )
+}
+
+const fn attempt_to(
+    id: Id,
+    target: EndpointTarget,
     http_version: ConnectionAttemptHttpVersions,
 ) -> Output {
     Output::AttemptConnection {
         id,
         endpoint: Endpoint {
-            target: EndpointTarget::Address(SocketAddr::new(addr, port)),
+            target,
             http_version,
             ech_config: None,
         },
         is_ech_retry: false,
     }
+}
+
+/// Chainable setters for the non-default fields of an expected
+/// [`Output::AttemptConnection`] built with [`attempt`] or [`attempt_by_name`].
+pub trait AttemptExt {
+    fn port(self, port: u16) -> Self;
+    /// Attach the default test ECH config ([`ech_config`]).
+    fn ech(self) -> Self;
+    /// Attach a specific ECH config.
+    fn ech_with(self, ech: EchConfig) -> Self;
+    fn ech_retry(self) -> Self;
+}
+
+impl AttemptExt for Output {
+    fn port(mut self, port: u16) -> Self {
+        let Self::AttemptConnection { endpoint, .. } = &mut self else {
+            panic!("not a connection attempt: {self:?}");
+        };
+        match &mut endpoint.target {
+            EndpointTarget::Address(address) => address.set_port(port),
+            EndpointTarget::Name { port: p, .. } => *p = port,
+        }
+        self
+    }
+
+    fn ech(self) -> Self {
+        self.ech_with(ech_config())
+    }
+
+    fn ech_with(mut self, ech: EchConfig) -> Self {
+        let Self::AttemptConnection { endpoint, .. } = &mut self else {
+            panic!("not a connection attempt: {self:?}");
+        };
+        endpoint.ech_config = Some(ech);
+        self
+    }
+
+    fn ech_retry(mut self) -> Self {
+        let Self::AttemptConnection { is_ech_retry, .. } = &mut self else {
+            panic!("not a connection attempt: {self:?}");
+        };
+        *is_ech_retry = true;
+        self
+    }
+}
+
+pub fn out_attempt_v6_h1_h2(id: Id) -> Output {
+    attempt(id, V6_ADDR, ConnectionAttemptHttpVersions::H2OrH1)
+}
+
+pub fn out_attempt_v6_h2(id: Id) -> Output {
+    attempt(id, V6_ADDR, ConnectionAttemptHttpVersions::H2)
+}
+
+pub fn out_attempt_v6_h3(id: Id) -> Output {
+    attempt(id, V6_ADDR, ConnectionAttemptHttpVersions::H3)
+}
+
+pub fn out_attempt_v6_h3_custom_port(id: Id) -> Output {
+    out_attempt_v6_h3(id).port(CUSTOM_PORT)
+}
+
+pub fn out_attempt_v4_h1_h2(id: Id) -> Output {
+    attempt(id, V4_ADDR, ConnectionAttemptHttpVersions::H2OrH1)
+}
+
+pub fn out_attempt_v4_h2(id: Id) -> Output {
+    attempt(id, V4_ADDR, ConnectionAttemptHttpVersions::H2)
+}
+
+pub fn out_attempt_v4_h3(id: Id) -> Output {
+    attempt(id, V4_ADDR, ConnectionAttemptHttpVersions::H3)
+}
+
+pub fn out_attempt_v4_h3_custom_port(id: Id) -> Output {
+    out_attempt_v4_h3(id).port(CUSTOM_PORT)
+}
+
+pub fn out_attempt_v6_h2_custom_port(id: Id) -> Output {
+    out_attempt_v6_h2(id).port(CUSTOM_PORT)
+}
+
+pub fn out_attempt_v4_h2_custom_port(id: Id) -> Output {
+    out_attempt_v4_h2(id).port(CUSTOM_PORT)
+}
+
+pub fn out_attempt(
+    id: Id,
+    addr: IpAddr,
+    port: u16,
+    http_version: ConnectionAttemptHttpVersions,
+) -> Output {
+    attempt(id, addr, http_version).port(port)
 }
 
 pub const fn out_resolution_delay() -> Output {

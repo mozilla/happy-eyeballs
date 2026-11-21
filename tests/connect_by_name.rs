@@ -15,8 +15,8 @@ use common::*;
 use std::time::Instant;
 
 use happy_eyeballs::{
-    ConnectionAttemptHttpVersions, DnsRecordType, Endpoint, EndpointTarget, FailureReason,
-    HappyEyeballs, HttpVersions, Id, NetworkConfig, Output, ResolutionMode,
+    ConnectionAttemptHttpVersions, DnsRecordType, EndpointTarget, FailureReason, HappyEyeballs,
+    HttpVersions, Id, NetworkConfig, Output, ResolutionMode,
 };
 
 fn by_name_config() -> NetworkConfig {
@@ -34,18 +34,7 @@ fn by_name_https_rr_config() -> NetworkConfig {
 }
 
 fn out_attempt_by_name(id: Id, http_version: ConnectionAttemptHttpVersions) -> Output {
-    Output::AttemptConnection {
-        id,
-        endpoint: Endpoint {
-            target: EndpointTarget::Name {
-                host: HOSTNAME.to_string(),
-                port: PORT,
-            },
-            http_version,
-            ech_config: None,
-        },
-        is_ech_retry: false,
-    }
+    attempt_by_name(id, HOSTNAME, PORT, http_version)
 }
 
 /// In `Name` mode the machine emits no DNS query at all and immediately
@@ -157,18 +146,12 @@ fn by_name_attempts_alt_svc_by_name_over_h3() {
     // First attempt: the alt-svc target, by name, over h3. It is preferred over
     // the by-name origin H2/H1 fallback, and no DNS query is emitted for it.
     he.expect(
-        Output::AttemptConnection {
-            id: Id::from(0),
-            endpoint: Endpoint {
-                target: EndpointTarget::Name {
-                    host: "alt.example.com".to_string(),
-                    port: PORT,
-                },
-                http_version: ConnectionAttemptHttpVersions::H3,
-                ech_config: None,
-            },
-            is_ech_retry: false,
-        },
+        attempt_by_name(
+            Id::from(0),
+            "alt.example.com",
+            PORT,
+            ConnectionAttemptHttpVersions::H3,
+        ),
         now,
     );
     he.expect(out_connection_attempt_delay(), now);
