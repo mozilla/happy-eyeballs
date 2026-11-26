@@ -412,6 +412,7 @@ const fn attempt_to(
             ech_config: None,
         },
         is_ech_retry: false,
+        optimistic: false,
     }
 }
 
@@ -424,6 +425,7 @@ pub trait AttemptExt {
     /// Attach a specific ECH config.
     fn ech_with(self, ech: EchConfig) -> Self;
     fn ech_retry(self) -> Self;
+    fn optimistic(self) -> Self;
 }
 
 impl AttemptExt for Output {
@@ -455,6 +457,14 @@ impl AttemptExt for Output {
             panic!("not a connection attempt: {self:?}");
         };
         *is_ech_retry = true;
+        self
+    }
+
+    fn optimistic(mut self) -> Self {
+        let Self::AttemptConnection { optimistic, .. } = &mut self else {
+            panic!("not a connection attempt: {self:?}");
+        };
+        *optimistic = true;
         self
     }
 }
