@@ -105,7 +105,7 @@ pub enum Input {
 /// as defined in [RFC 9849 Section 4].
 ///
 /// [RFC 9849 Section 4]: https://datatracker.ietf.org/doc/html/rfc9849#section-4
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct EchConfig(Vec<u8>);
 
 impl EchConfig {
@@ -937,7 +937,7 @@ pub enum EndpointTarget {
 }
 
 /// All information (target, HTTP version, ...) needed to attempt a connection to a specific endpoint.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Endpoint {
     pub target: EndpointTarget,
     pub http_version: ConnectionAttemptHttpVersions,
@@ -1076,9 +1076,9 @@ pub struct HappyEyeballs {
     id_generator: IdGenerator,
     dns_queries: Vec<DnsQuery>,
     connection_attempts: Vec<ConnectionAttempt>,
-    /// ECH retries received over the lifetime of this state machine.
-    /// Each entry is `(previous_attempt_id, new_ech_config)`.
-    ech_retries: Vec<(Id, EchConfig)>,
+    /// ECH retries not yet attempted: the endpoint of the attempt that received
+    /// `retry_configs`, carrying the new ECH config.
+    ech_retries: VecDeque<Endpoint>,
     /// Network configuration
     network_config: NetworkConfig,
     host: Host,
@@ -1162,7 +1162,7 @@ impl HappyEyeballs {
             network_config,
             dns_queries: Vec::new(),
             connection_attempts: Vec::new(),
-            ech_retries: Vec::new(),
+            ech_retries: VecDeque::new(),
             host,
             port,
         };
@@ -1600,7 +1600,10 @@ impl HappyEyeballs {
                     return;
                 }
 
-                self.ech_retries.push((id, ech_config));
+                self.ech_retries.push_back(Endpoint {
+                    ech_config: Some(ech_config),
+                    ..attempt.endpoint.clone()
+                });
             }
         }
     }
@@ -1668,12 +1671,18 @@ impl HappyEyeballs {
         {
             return None;
         }
-        let endpoint = self.endpoints_to_attempt().into_iter().find(|endpoint| {
-            !self
-                .connection_attempts
-                .iter()
-                .any(|attempt| attempt.endpoint == *endpoint)
-        })?;
+        // Look candidates up in a set rather than scanning every past attempt
+        // for each of them: an HTTPS record with many IP hints yields thousands
+        // of endpoints, and the scan made each step quadratic in their number.
+        let attempted: HashSet<&Endpoint> = self
+            .connection_attempts
+            .iter()
+            .map(|attempt| &attempt.endpoint)
+            .collect();
+        let endpoint = self
+            .endpoints_to_attempt()
+            .into_iter()
+            .find(|endpoint| !attempted.contains(endpoint))?;
         let id = self.id_generator.next_id();
 
         self.connection_attempts.push(ConnectionAttempt {
@@ -1693,18 +1702,18 @@ impl HappyEyeballs {
 
     /// Emit a connection attempt for a pending ECH retry, if any.
     fn ech_retry_attempt(&mut self, now: Instant) -> Option<Output> {
-        let endpoint = self.ech_retries.iter().find_map(|(prev_id, ech_config)| {
-            let prev = self.connection_attempts.iter().find(|a| a.id == *prev_id)?;
-            let endpoint = Endpoint {
-                ech_config: Some(ech_config.clone()),
-                ..prev.endpoint.clone()
-            };
-            let already_attempted = self
+        // Each retry is taken off the queue once, so retries that were already
+        // attempted are not re-examined on every call.
+        let endpoint = loop {
+            let endpoint = self.ech_retries.pop_front()?;
+            if !self
                 .connection_attempts
                 .iter()
-                .any(|a| a.endpoint == endpoint);
-            (!already_attempted).then_some(endpoint)
-        })?;
+                .any(|a| a.endpoint == endpoint)
+            {
+                break endpoint;
+            }
+        };
 
         let id = self.id_generator.next_id();
         self.connection_attempts.push(ConnectionAttempt {
