@@ -39,6 +39,45 @@ fn ech_config_propagated_to_endpoint() {
     );
 }
 
+/// Every endpoint of a record shares the record's ECH config bytes rather than
+/// holding its own copy. The endpoints are rebuilt for each connection attempt,
+/// one per (address, protocol) pair, so a copy each would allocate a large
+/// config thousands of times over for a record with many IP hints.
+#[test]
+fn ech_config_shared_across_endpoints() {
+    let (now, mut he) = setup();
+    let ech = ech_config();
+
+    expect_initial_dns_queries(&mut he, now);
+    he.input(
+        Input::DnsResult {
+            id: Id::from(0),
+            result: DnsResult::Https(Ok(vec![
+                service_info(1, HOSTNAME, &[HttpVersion::H3, HttpVersion::H2])
+                    .ipv6_hints(vec![V6_ADDR, V6_ADDR_2])
+                    .ech_with(ech.clone()),
+            ])),
+            stale: false,
+        },
+        now,
+    );
+    // Keep every config alive, so that no copy can reuse a freed buffer.
+    let mut configs = Vec::new();
+    for _ in 0..4 {
+        let Some(Output::AttemptConnection { id, endpoint, .. }) = he.process_output(now) else {
+            panic!("expected a connection attempt");
+        };
+        let endpoint_ech = endpoint
+            .ech_config
+            .expect("endpoint carries the ECH config");
+        assert_eq!(endpoint_ech, ech);
+        configs.push(endpoint_ech);
+        he.input(in_connection_result_negative(id), now);
+    }
+    let first = configs[0].as_ref().as_ptr();
+    assert!(configs.iter().all(|c| c.as_ref().as_ptr() == first));
+}
+
 /// A negative A/AAAA answer does NOT discard the HTTPS IP hint: the hint is
 /// kept and tried as a fallback alongside the other family's real address. The
 /// preferred family is ordered first, so the hint of the (negative) preferred
